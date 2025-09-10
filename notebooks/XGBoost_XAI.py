@@ -7,15 +7,15 @@ import pandas as pd
 import numpy as np
 import xgboost as xgb
 from lime.lime_tabular import LimeTabularExplainer
+from sklearn.calibration import calibration_curve, CalibrationDisplay
+
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, recall_score, confusion_matrix, roc_auc_score
+from sklearn.metrics import accuracy_score, recall_score, confusion_matrix, roc_auc_score, roc_curve, f1_score, \
+    precision_score, average_precision_score
 import matplotlib.pyplot as plt
 from sklearn.model_selection import GridSearchCV
 import shap
-
-
-
 
 
 # %% Clean the data (split the data from the outcome)
@@ -46,15 +46,14 @@ def normalise_data(train, test):
 
 # %% # Calculate scale_pos_weight for class imbalance
 def get_scale_pos_weight(y_train):
-    n_negative = sum(y_train == 0)
-    n_positive = sum(y_train == 1)
-    scale_pos_weight = n_negative / n_positive if n_positive > 0 else 1
-    print(f"Scale Pos Weight: {math.ceil(scale_pos_weight)} (Negative: {n_negative}, Positive: {n_positive})")
-    return scale_pos_weight * 1.5
+    scale_pos_weight = len(y_train[y_train == 0]) / len(y_train[y_train == 1])
+    return scale_pos_weight
+
 
 
 # %% # Train XGBoost classifier
-# n_estimators=100,
+#  parameters in the paper:
+#         n_estimators=100,
 #         max_depth=3,
 #         eta=0.1,
 #         gamma=0.25,
@@ -90,8 +89,7 @@ def train_xgboost(x_train, y_train):
         colsample_bytree=1,
         min_child_weight=1,
         subsample=0.7, # paper 0.5 [0.6, 0.8]
-        # scale_pos_weight=18,
-        scale_pos_weight=get_scale_pos_weight(y_train), # try *0,5 *2
+        scale_pos_weight=get_scale_pos_weight(y_train),
         eval_metric='auc'
     )
     model_xgb.fit(x_train, y_train)
@@ -109,29 +107,117 @@ def evaluate_model(model, test_scaled, y_test):
     tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
     specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
     auc = roc_auc_score(y_test, y_pred_proba)
+    auprc = average_precision_score(y_test, y_pred_proba)
+    f1 = f1_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred)
 
     print(f"Accuracy: {accuracy:.2f}")
     print(f"Sensitivity: {sensitivity:.2f}")
     print(f"Specificity: {specificity:.2f}")
     print(f"True Negative: {tn} False Positive: {fp} False Negative: {fn} True Positive: {tp}")
     print(f"AUC: {auc:.2f}")
+    print(f"AUPRC (Average Precision): {auprc:.2f}")
+    print(f"Precision: {precision:.2f}")
+    print(f"F1 Score: {f1:.2f}")
 
-    # thresholds = [0.3, 0.1, 0.05, 0.035, 0.01]
-    thresholds = [0.026, 0.017, 0.035]
-    for threshold in thresholds:
-        add_threshold_to_predictions(y_pred_proba, y_test, threshold)
+    threshold = get_optimal_threshold(y_test, y_pred_proba, auc)
+    print(f"Optimal Threshold: {threshold:.3f}")
+    add_threshold_to_predictions(y_pred_proba, y_test, threshold)
+
+    # Compute calibration curve
+    prob_true, prob_pred = calibration_curve(y_test, y_pred_proba, n_bins=10)
+
+    # n_bootstraps = 100
+    # boot_prob_true = []
+    # boot_prob_pred = []
+    #
+    # for i in range(n_bootstraps):
+    #     # Resample training data with replacement
+    #     X_res, y_res = resample(X_train, y_train, random_state=i)
+    #
+    #     # Train model on the resampled dataset
+    #     model.fit(X_res, y_res)
+    #
+    #     # Predict probabilities on the original test set
+    #     y_prob_boot = model.predict_proba(X_test)[:, 1]
+    #
+    #     # Compute calibration curve for this bootstrap
+    #     pt, pp = calibration_curve(y_test, y_prob_boot, n_bins=10)
+    #
+    #     # Store results
+    #     boot_prob_true.append(pt)
+    #     boot_prob_pred.append(pp)
+
+    # Plot
+    plt.figure(figsize=(7, 7))
+
+    # Ideal line
+    plt.plot([0, 1], [0, 1], linestyle='--', color='gray', label='Ideal')
+
+    # Apparent
+    CalibrationDisplay.from_predictions(
+        y_test, y_pred_proba, n_bins=10, name='Apparent', ax=plt.gca(), color='blue', marker='o'
+    )
+
+    # Bias-corrected
+    # plt.plot(prob_pred_bias_corrected, prob_true_bias_corrected, marker='s', color='red', label='Bias-corrected')
+
+    plt.xlabel('Predicted probability')
+    plt.ylabel('Observed probability')
+    plt.title('Calibration Plot')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+def get_optimal_threshold(y_test, y_pred_proba, auc):
+    # https://towardsdatascience.com/optimal-threshold-for-imbalanced-classification-5884e870c293/
+    fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba)
+
+    # df_fpr_tpr = pd.DataFrame({'FPR': fpr, 'TPR': tpr, 'Threshold': thresholds})
+    # print(df_fpr_tpr.head())
+
+    youdensj = tpr - fpr
+    idx = np.argmax(youdensj)
+    best_threshold = thresholds[idx]
+
+    # Plot the ROC curve
+    plot_roc_curve(fpr, tpr, thresholds, idx, auc)
+
+    return best_threshold
+
+def plot_roc_curve(fpr, tpr, thresholds, idx, auc):
+    plt.figure(figsize=(7, 6))
+    plt.plot(fpr, tpr, color="blue", label=f"ROC curve (AUC = {auc:.3f})")
+    plt.plot([0, 1], [0, 1], color="gray", linestyle="--", label="Random guess")
+
+    # Mark the optimal threshold point
+    plt.scatter(fpr[idx], tpr[idx], color="red", label=f"Best threshold = {thresholds[idx]:.3f}")
+
+    plt.xlabel("1 - Specificity (FPR)")
+    plt.ylabel("Sensitivity (TPR)")
+    plt.title("ROC Curve")
+    plt.legend(loc="lower right")
+    plt.tight_layout()
+    plt.show()
 
 def add_threshold_to_predictions(y_pred_proba, y_test, threshold=0.015):
     y_pred_adjusted = (y_pred_proba >= threshold).astype(int)
     accuracy = accuracy_score(y_test, y_pred_adjusted)
     sensitivity = recall_score(y_test, y_pred_adjusted)
+    precision = precision_score(y_test, y_pred_adjusted)
+    f1 = f1_score(y_test, y_pred_adjusted)
+
     tn_adj, fp_adj, fn_adj, tp_adj = confusion_matrix(y_test, y_pred_adjusted).ravel()
     specificity = tn_adj / (tn_adj + fp_adj) if (tn_adj + fp_adj) > 0 else 0
-    print(f"\nWith threshold {threshold}:")
+
+    # print(f"\nWith threshold {threshold}:")
     print(f"Accuracy: {accuracy:.2f}")
     print(f"Sensitivity: {sensitivity:.2f}")
     print(f"Specificity: {specificity:.2f}")
     print(f"True Negative: {tn_adj} False Positive: {fp_adj} False Negative: {fn_adj} True Positive: {tp_adj}")
+    print(f"Precision: {precision:.2f}")
+    print(f"F1 Score: {f1:.2f}")
 
 # %%
 def get_feature_imp_df(imp, features):
@@ -149,25 +235,30 @@ def show_feature_importance(df, filename, top_n=40):
     plt.figure(figsize=(10, 6))
     plt.barh(top_feats['feature'][::-1], top_feats['importance'][::-1])
     plt.xlabel('Importance Score')
-    plt.title(f'Top {top_n} Feature Importances (XGBoost)')
+    plt.title(f'Top {len(top_feats)} Feature Importances (XGBoost)')
     plt.tight_layout()
-    plt.savefig(filename+'.png')
+    plt.savefig(filename+'_feature_importance.png')
     plt.show()
 
 # %%
-def generate_shap_explanations(model_xgb, X_train, feat_imp_df, filename):
+def generate_shap_explanations(model_xgb, X_train, feat_imp_df, features, filename):
     # SHAP explainer
     explainer = shap.Explainer(model_xgb)
     shap_values = explainer(X_train)
 
+    feature_importance_shap = pd.DataFrame({
+        'feature': features,
+        'importance': np.abs(shap_values.values).mean(axis=0)
+    }).sort_values(by='importance', ascending=False)
+
     # summary plot
     shap.summary_plot(shap_values, X_train, feature_names=feat_imp_df['feature'].tolist(), show=False)
-    plt.savefig(f'{filename}_summary.png')
+    plt.savefig(f'{filename}_shap_summary.png')
     plt.close()
 
     # Waterfall plot
     shap.plots.waterfall(shap_values[0], show=False)  # for the 1st observation
-    plt.savefig(f'{filename}_1st_observation.png')
+    plt.savefig(f'{filename}_shap_1st_observation.png')
     plt.close()
     # shap.plots.waterfall(shap_values[1], max_display=4)  # for the 2nd observation only display 4
 
@@ -194,6 +285,8 @@ def generate_shap_explanations(model_xgb, X_train, feat_imp_df, filename):
     # shap.summary_plot(shap_values, X_train_top)
     # shap.summary_plot(shap_values, X_train_top, plot_type="violin", feature_names=X_train_top.columns)
 
+    return feature_importance_shap
+
 # %%
 
 def generate_lime_explanations(model_xgb, X_train, feat_imp_df, filename, num_samples=5):
@@ -201,6 +294,7 @@ def generate_lime_explanations(model_xgb, X_train, feat_imp_df, filename, num_sa
     Generate LIME explanations for the first few samples in X_train.
     Saves explanation plots as PNG files.
     """
+
     # Convert X_train to numpy if it's a DataFrame
     if hasattr(X_train, "values"):
         X_train_np = X_train.values
@@ -237,7 +331,8 @@ def get_feature_importance(dataset, folder, filename, features=None, normalise=F
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42,
                                                         stratify=y)
     print(f"Num of train data: {len(X_train)}. Num of test data: {len(X_test)}")
-    print(f"Outcome: {y_test.value_counts()}")
+    print(f"Train Outcome: {y_train.value_counts()}")
+    print(f"Test Outcome: {y_test.value_counts()}")
     if normalise:
         print("Normalising data...")
         X_train, X_test = normalise_data(X_train, X_test)
@@ -256,20 +351,25 @@ def get_feature_importance(dataset, folder, filename, features=None, normalise=F
     # "weight": number of times a feature appears in trees
     # "gain": average gain from splits using the feature (often most informative)
     # "cover": number of observations related to splits
-    xgb.plot_importance(model_xgb, max_num_features=20, importance_type='gain', height=0.9)
+    xgb.plot_importance(model_xgb, max_num_features=30, importance_type='gain', height=0.9)
     plt.title("Feature Importance (XGBoost)")
     plt.tight_layout()
     plt.show()
 
     show_feature_importance(feat_imp_df, os.path.join(folder, filename))
-    print("Feature importance plot saved to:", filename)
-    print("Genarating SHAP explanations...")
-    generate_shap_explanations(model_xgb, X_train, feat_imp_df, os.path.join(folder, filename))
-    print("SHAP explanations generated and saved.")
-    print("Generating LIME explanations...")
-    generate_lime_explanations(model_xgb, X_train, feat_imp_df, os.path.join(folder, filename), num_samples=3)
+    print("Feature importance plot saved")
 
-    return feat_imp_df
+    print("Genarating SHAP explanations...")
+    feature_importance_shap = generate_shap_explanations(model_xgb, X_train, feat_imp_df, features, os.path.join(folder, filename))
+    print("SHAP explanations generated and saved.")
+
+    print("Generating LIME explanations...")
+    nan_rows = X.isna().any(axis=1)
+    num_rows_to_remove = nan_rows.sum()
+    if num_rows_to_remove == 0:
+        generate_lime_explanations(model_xgb, X_train, feat_imp_df, os.path.join(folder, filename), num_samples=3)
+
+    return feat_imp_df, feature_importance_shap
 
 
 # def get_plot_filename(filename, plot_name):
@@ -278,7 +378,7 @@ def get_feature_importance(dataset, folder, filename, features=None, normalise=F
 
 def main():
     folder = "C:/Users/maria/Code/master/xai-synthetic-health/notebooks/"
-    # Read the dataset
+    # Read the datasets
     non_pre_dataset = pd.read_csv(os.path.join(folder, 'icu_dka_dataset_20250723.csv'))
     non_pre_dataset['min/max'] = np.where(
         (non_pre_dataset['osmolality_min'].isna()) |
@@ -299,52 +399,96 @@ def main():
 
     # min/max, the ratio of the minimum and maximum plasma osmolality; ‘I’_max, maximum body temperature; map_min
     feature_imp_folder = "xai"
-    # No preprocessing
-    # print("Getting feature importance for non-preprocessed dataset...")
-    # no_pre_feat_imp_df = get_feature_importance(
-    #     non_pre_dataset,
-    #     os.path.join(folder, feature_imp_folder),
-    #     'noPreFeatureImportance'
-    # )
-    # XGBoost with top 40 features
-    # top_features = no_pre_feat_imp_df['feature'].head(40).tolist()
-    # print("Top 40 Features Selected:")
-    # print(top_features)
+    num_top = 30
 
-    # get_feature_importance(
-    #     non_pre_dataset,
-    #     os.path.join(folder, feature_imp_folder),
-    #     'noPreTopFeatureImportance',
-    #     features=top_features,
-    # )
+    # No preprocessing
+    print("-----------A: Getting feature importance for non-preprocessed dataset...-----------")
+    no_pre_feat_imp_df, feature_importance_shap = get_feature_importance(
+        non_pre_dataset,
+        os.path.join(folder, feature_imp_folder),
+        'A'
+    )
+    # Take the first 30 rows
+    feat_subset = no_pre_feat_imp_df['feature'].head(30)
+
+    # Compare with first 30 features of other_df
+    other_subset = feature_importance_shap['feature'].head(30)
+
+    if set(feat_subset) == set(other_subset):
+        print("The first 30 features match")
+    else:
+        print("The first 30 features are different")
+
+    # Optional: see differences
+    diff1 = set(feat_subset) - set(other_subset)
+    diff2 = set(other_subset) - set(feat_subset)
+    print("In feat_imp_df but not in other_df:", diff1)
+    print("In other_df but not in feat_imp_df:", diff2)
+    # XGBoost with top features
+    top_features = no_pre_feat_imp_df['feature'].head(num_top).tolist()
+    print(f"---Top {num_top} Features Selected:---")
+    print(top_features)
+
+    get_feature_importance(
+        non_pre_dataset,
+        os.path.join(folder, feature_imp_folder),
+        f'A_top_{num_top}',
+        features=top_features,
+    )
+
+    # XGBoost with top features according to SHAP
+    top_features = feature_importance_shap['feature'].head(num_top).tolist()
+    print(f"---Top {num_top} SHAP Features Selected:---")
+    print(top_features)
+
+    get_feature_importance(
+        non_pre_dataset,
+        os.path.join(folder, feature_imp_folder),
+        f'A_top_shap_{num_top}',
+        features=top_features,
+    )
 
     # Preprocessed dataset
-    print("Getting feature importance for preprocessed dataset...")
-    pre_feat_imp_df = get_feature_importance(
+    print("--------- B: Getting feature importance for preprocessed dataset...---------")
+    pre_feat_imp_df, feature_importance_shap = get_feature_importance(
         pre_dataset,
         os.path.join(folder, feature_imp_folder),
-        'preFeatureImportance',
+        'B',
         normalise=True)
 
-    # XGBoost with top 40 features
-    top_features = pre_feat_imp_df['feature'].head(40).tolist()
-    print("Top 40 Features Selected:")
+    # XGBoost with top features
+    top_features = pre_feat_imp_df['feature'].head(num_top).tolist()
+    print(f"---Top {num_top} Features Selected:---")
     print(top_features)
-    pre_feat_imp_df = get_feature_importance(
+    pre_feat_imp_df, feature_importance_shap = get_feature_importance(
         pre_dataset,
         os.path.join(folder, feature_imp_folder),
-        'preTopFeatureImportance',
+        f'B_top_{num_top}',
         features=top_features,
         normalise=True)
 
-    # Paper dataset
-    print("Getting feature importance for paper dataset...")
+    # XGBoost with top features according to SHAP
+    top_features = feature_importance_shap['feature'].head(num_top).tolist()
+    print(f"---Top {num_top} SHAP Features Selected:---")
+    print(top_features)
+
     get_feature_importance(
+        non_pre_dataset,
+        os.path.join(folder, feature_imp_folder),
+        f'B_top_shap_{num_top}',
+        features=top_features,
+    )
+
+    # Paper dataset
+    print("--------- C: Getting feature importance for paper dataset...---------")
+    feature_importance, feature_importance_shap = get_feature_importance(
         pre_dataset,
         os.path.join(folder, feature_imp_folder),
-        'paperFeatureImportance',
+        'C',
         features=paper_features,
         normalise=True)
+
+    print(feature_importance_shap)
 
 
 if __name__ == "__main__":
