@@ -7,6 +7,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+import shap
 import torch
 from packaging import version
 from torch import optim
@@ -157,7 +158,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                  generator_lr=2e-4, generator_decay=1e-6, discriminator_lr=2e-4,
                  discriminator_decay=1e-6, batch_size=500, discriminator_steps=1,
                  log_frequency=True, verbose=False, epochs=300, pac=10, cuda=True, private=False,
-                 wandb=False, conditional_columns=None):
+                 wandb=False, xai=None, conditional_columns=None):
 
         assert batch_size % 2 == 0
 
@@ -180,6 +181,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self.private = private
         self.conditional_columns = conditional_columns
         self.wandb = wandb
+        self.xai = xai
   
             
 
@@ -538,7 +540,12 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
                             loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
 
-     
+                            if self.xai == 'SHAP':
+                                print("Here Shap")
+                            elif self.xai == 'LIME':
+                                print("Here Lime")
+
+
                             #### DP ####
                             if self.private:
                                 sigma = 1
@@ -811,7 +818,6 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
 
     def xai_discriminator(self, data_samples):
-
         # for exlain AI (SHAP) the single row from the pd.DataFrame needs to be transformed. 
         data_samples = pd.DataFrame(data_samples).T
 
