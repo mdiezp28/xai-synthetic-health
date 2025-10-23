@@ -30,6 +30,39 @@ from pathlib import Path
 import copy
 import matplotlib.pyplot as plt
 
+def _spearman_penalty(u: torch.Tensor, v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """1 - Spearman rank correlation (descending). Returns scalar in [0, 2]."""
+    # ranks (0=lowest importance). Use descending importance by negating.
+    r_u = torch.argsort(torch.argsort(-u))
+    r_v = torch.argsort(torch.argsort(-v))
+    r_u = r_u.float(); r_v = r_v.float()
+    # Pearson on ranks
+    r_u = (r_u - r_u.mean()) / (r_u.std() + eps)
+    r_v = (r_v - r_v.mean()) / (r_v.std() + eps)
+    #  1 = identical, then 1 - 1 = 0 penalty
+    # -1 = reversed, then 1 - (-1) = 2 penalty
+    #  0 = uncorrelated, then 1 - 0 = 1 penalty
+    return 1.0 - (r_u * r_v).mean()  # higher = worse order match
+
+def _build_feature_groups(output_info_list):
+    """Optional: group one-hot spans into original columns."""
+    groups, st = [], 0
+    for col in output_info_list:
+        span = sum(si.dim for si in col)
+        groups.append(slice(st, st + span))
+        st += span
+    return groups
+
+def _shap_to_torch_matrix(sv, X_like: torch.Tensor) -> torch.Tensor:
+    """Normalize SHAP output to a torch.FloatTensor [B, F_total] on the same device as X_like."""
+    if isinstance(sv, list):  # single-output models return [array]
+        sv = sv[0]
+    t = torch.as_tensor(sv, device=X_like.device, dtype=torch.float32)
+    # If SHAP gave [F, B], transpose to [B, F]
+    if t.dim() == 2 and t.shape[0] == X_like.shape[1] and t.shape[1] == X_like.shape[0]:
+        t = t.T
+    return t
+
 class Discriminator(Module):
 
     def __init__(self, input_dim, discriminator_dim, pac=10):
@@ -37,6 +70,8 @@ class Discriminator(Module):
         dim = input_dim * pac
         self.pac = pac
         self.pacdim = dim
+        self._rowwise_mode = False
+
         seq = []
         for item in list(discriminator_dim):
             seq += [Linear(dim, item), LeakyReLU(0.2), Dropout(0.5)]
@@ -65,9 +100,55 @@ class Discriminator(Module):
 
         return gradient_penalty
 
+    def calc_shap_importance_penalty(self, real_data, fake_data, transformer, device='cpu'):
+        self.eval()
+        self.enable_rowwise(True)
+
+        bck_s = min(50, real_data.size(0))
+        background = real_data[:bck_s]
+
+        explainer = shap.DeepExplainer(self, background)
+        sv_real = explainer.shap_values(real_data, check_additivity=False)
+        sv_fake = explainer.shap_values(fake_data, check_additivity=False)
+
+        # back to normal mode so training continues with packing
+        self.enable_rowwise(False)
+        self.train()
+
+        sv_real = _shap_to_torch_matrix(sv_real, real_data)  # [B, F_total] torch, correct device
+        sv_fake = _shap_to_torch_matrix(sv_fake, fake_data)
+
+        # From expand features to real number of features
+        data_dim = transformer.output_dimensions
+        imp_real_feat = sv_real[:, :data_dim].abs().mean(dim=0)  # [F_data]
+        imp_fake_feat = sv_fake[:, :data_dim].abs().mean(dim=0)  # [F_data]
+
+        groups = _build_feature_groups(transformer.output_info_list)
+        imp_real_col = torch.stack([imp_real_feat[sl].sum() for sl in groups])  # [num_cols]
+        imp_fake_col = torch.stack([imp_fake_feat[sl].sum() for sl in groups])  # [num_cols]
+
+        # Spearman order penalty - batch level (change to patient level?)
+        shap_order_penalty = _spearman_penalty(imp_fake_col.detach(), imp_real_col.detach())
+
+        return shap_order_penalty
+
+    def enable_rowwise(self, flag: bool = True):
+        self._rowwise_mode = bool(flag)
+
     def forward(self, input):
-        assert input.size()[0] % self.pac == 0
-        return self.seq(input.view(-1, self.pacdim))
+        if not self._rowwise_mode:
+            assert input.size()[0] % self.pac == 0
+            return self.seq(input.view(-1, self.pacdim))
+
+        B = input.size(0)
+        pad = (-B) % self.pac
+        if pad:
+            input = torch.cat([input, input[-1:].repeat(pad, 1)], dim=0)  # [B', F]
+        y_pack = self.seq(input.view(-1, self.pacdim)).squeeze(-1)  # [B'/pac]
+        y_row = y_pack.repeat_interleave(self.pac)  # [B']
+        if pad:
+            y_row = y_row[:-pad]  # [B]
+        return y_row.unsqueeze(-1)
 
 
 class Residual(Module):
@@ -540,12 +621,6 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
                             loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
 
-                            if self.xai == 'SHAP':
-                                print("Here Shap")
-                            elif self.xai == 'LIME':
-                                print("Here Lime")
-
-
                             #### DP ####
                             if self.private:
                                 sigma = 1
@@ -561,6 +636,26 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
                             pen = self._discriminator.calc_gradient_penalty(
                                 real_cat, fake_cat, self._device, self.pac)
+
+                            if self.xai == 'SHAP':
+                                print("Here Shap")
+                                shap_order_penalty = self._discriminator.calc_shap_importance_penalty(
+                                    real_cat,
+                                    fake_cat,
+                                    self._transformer,
+                                    device=self._device)
+
+                                beta = 1e-3
+                                print(f"(base)loss_d={loss_d.item()} "
+                                      f"penalty={shap_order_penalty.item()} "
+                                      f"shearman_rho={1 - shap_order_penalty.item()} "
+                                      f"beta = {beta}")
+
+                                loss_d = loss_d + beta * shap_order_penalty
+                                print("(shap)loss_d:", loss_d.item())
+
+                            elif self.xai == 'LIME':
+                                print("Here Lime")
 
                             optimizerD.zero_grad()
                             pen.backward(retain_graph=True) # https://machinelearningmastery.com/how-to-implement-wasserstein-loss-for-generative-adversarial-networks/ 
