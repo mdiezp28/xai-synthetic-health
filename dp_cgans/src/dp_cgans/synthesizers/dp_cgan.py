@@ -20,6 +20,8 @@ import wandb
 from packaging import version
 from torch import optim
 from torch.nn import BatchNorm1d, Dropout, LeakyReLU, Linear, Module, ReLU, Sequential, functional, BCEWithLogitsLoss
+from torch.utils.tensorboard import SummaryWriter
+import time
 from tqdm import tqdm
 
 from dp_cgans.data_sampler import DataSampler
@@ -544,6 +546,12 @@ class DPCGANSynthesizer(BaseSynthesizer):
             betas=(0.5, 0.9), weight_decay=self._discriminator_decay
         )
 
+        # TensorBoard
+        run_id = time.strftime("%Y%m%d-%H%M%S")
+        log_dir = f"runs/dpcgan/{run_id}"
+        writer = SummaryWriter(log_dir=log_dir)
+        print(f"[TB] logging to {log_dir}")
+
         mean = torch.zeros(self._batch_size, self._embedding_dim, device=self._device)
         std = mean + 1
 
@@ -555,6 +563,11 @@ class DPCGANSynthesizer(BaseSynthesizer):
             epoch_iterator.set_description(description.format(gen=0, dis=0))
 
         steps_per_epoch = max(len(train_data) // self._batch_size, 1)
+
+        global_step = 0
+        last_shap_penalty = None
+        last_spearman_rho = None
+
         ######## ADDED ########
         with open('loss_output_%s.txt' % str(epochs), 'w') as f:
             with redirect_stdout(f):
@@ -621,7 +634,8 @@ class DPCGANSynthesizer(BaseSynthesizer):
                             y_real = self._discriminator(real_cat)
 
                             loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
-
+                            # for logging purpose
+                            loss_d_base = loss_d
                             #### DP ####
                             if self.private:
                                 sigma = 1
@@ -647,22 +661,40 @@ class DPCGANSynthesizer(BaseSynthesizer):
                                     device=self._device)
 
                                 beta = 1e-3
-                                print(f"(base)loss_d={loss_d.item()} "
+                                loss_d = loss_d + beta * shap_order_penalty
+
+                                print(f"{global_step} (base)loss_d={loss_d_base.item()} "
                                       f"penalty={shap_order_penalty.item()} "
                                       f"shearman_rho={1 - shap_order_penalty.item()} "
-                                      f"beta = {beta}")
+                                      f"beta = {beta}"
+                                      f"(shap)loss_d={loss_d.item()}")
 
-                                loss_d = loss_d + beta * shap_order_penalty
-                                print("(shap)loss_d:", loss_d.item())
+
+                                last_shap_penalty = float(shap_order_penalty.detach().cpu())
+                                last_spearman_rho = 1.0 - last_shap_penalty
 
                             elif self.xai == 'LIME':
                                 print("Here Lime")
+                                # TODO:
 
                             optimizerD.zero_grad()
-                            pen.backward(
-                                retain_graph=True)  # https://machinelearningmastery.com/how-to-implement-wasserstein-loss-for-generative-adversarial-networks/
+                            # https://machinelearningmastery.com/how-to-implement-wasserstein-loss-for-generative-adversarial-networks/
+                            pen.backward(retain_graph=True)
                             loss_d.backward()
                             optimizerD.step()
+
+                            # ---- TensorBoard logging (D) ----
+                            # writer.add_scalar("loss/discriminator_base", float(loss_d_base.detach().cpu()), global_step)
+                            # writer.add_scalar("loss/discriminator_total", float(loss_d.detach().cpu()), global_step)
+                            writer.add_scalars("loss/discriminator", {
+                                "base": float(loss_d_base.detach().cpu()),
+                                "total": float(loss_d.detach().cpu())
+                            }, global_step)
+                            writer.add_scalar("loss/grad_penalty", float(pen.detach().cpu()), global_step)
+
+                            if last_shap_penalty is not None:
+                                writer.add_scalar("xai/shap_penalty", last_shap_penalty, global_step)  # in [0,2]
+                                writer.add_scalar("xai/spearman_rho", last_spearman_rho, global_step)  # in [-1,1]
 
                             if self.private:
                                 #### DP ####
@@ -723,6 +755,9 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         optimizerG.zero_grad(set_to_none=False)
                         loss_g.backward()
                         optimizerG.step()
+
+                        # ----- TensorBoard G
+                        writer.add_scalar("loss/generator", float(loss_g.detach().cpu()), global_step)
 
                     generator_loss = loss_g.detach().cpu()
                     discriminator_loss = loss_d.detach().cpu()
@@ -814,9 +849,15 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         else:
                             epsilon = np.nan
 
+                    global_step += 1
+
+
+
                     ######## ADDED ########
                 if self.wandb == True:
                     wandb.finish()
+
+        writer.close()
 
     #
     # def corr_plot(self, real_data, syn_data):
