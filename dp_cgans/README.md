@@ -42,7 +42,7 @@ wget https://raw.githubusercontent.com/sunchang0124/dp_cgans/main/resources/exam
 Then run `dp-cgans`:
 
 ```bash
-dp-cgans gen example_tabular_data_UCIAdult.csv --epochs 2 --output out.csv --gen-size 100
+dp-cgans gen example_tabular_data_UCIAdult.csv --epochs 100 --output out.csv --gen-size 100
 ```
 
 Get a full rundown of the available options for generating synthetic data with:
@@ -65,7 +65,7 @@ tabular_data=pd.read_csv("../resources/example_tabular_data_UCIAdult.csv")
 
 # We adjusted the original CTGAN model from SDV. Instead of looking at the distribution of individual variable, we extended to two variables and keep their corrll
 model = DP_CGAN(
-    epochs=100, # number of training epochs
+    epochs=500, # number of training epochs
     batch_size=100, # the size of each batch
     log_frequency=True,
     verbose=True,
@@ -73,17 +73,27 @@ model = DP_CGAN(
     discriminator_dim=(128, 128, 128),
     generator_lr=2e-4, 
     discriminator_lr=2e-4,
-    discriminator_steps=1, 
+    discriminator_steps=10, 
     private=False,
 )
 
-print("Start training model")
+start_time = time.time()
+print("Start training the model: ")
 model.fit(tabular_data)
+end_time = time.time()
+
+elapsed_time = end_time - start_time
+print("Training model time ", elapsed_time)
+
+print("Saving the trained generator...")
 model.save("generator.pkl")
+
+# print("load the trained file.")
+# loaded_model=DP_CGAN.load("PATH_TO_MODEL")
 
 # Generate 100 synthetic rows
 syn_data = model.sample(100)
-syn_data.to_csv("syn_data_file.csv")
+syn_data.to_csv("syn_data_file.csv",index=None)
  ```
 
 <!-- 
