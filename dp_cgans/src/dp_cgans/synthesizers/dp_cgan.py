@@ -567,8 +567,6 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         fakez = torch.normal(mean=mean, std=std).to(self._device)
 
                         condvec_pair = self._data_sampler.sample_condvec_pair(self._batch_size)
-                        c_pair_1, m_pair_1, col_pair_1, opt_pair_1 = condvec_pair
-
 
                         if condvec_pair is None:
                             c_pair_1, m_pair_1, col_pair_1, opt_pair_1 = None, None, None, None
@@ -591,8 +589,6 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         fake = self._generator(fakez) # categories (unique value count) + continuous (1+n_components)
                         fakeact = self._apply_activate(fake)
 
-
-
                         if col_pair_1 is not None:
                             fake_cat = torch.cat([fakeact, c_pair_1], dim=1)
                             real_cat = torch.cat([real, c_pair_2], dim=1)
@@ -604,7 +600,8 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         y_fake = self._discriminator(fake_cat)
                         y_real = self._discriminator(real_cat)
                         loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
-
+                        # for logging purpose
+                        loss_d_base = loss_d
 
                         #### DP ####
                         if self.private:
@@ -653,31 +650,31 @@ class DPCGANSynthesizer(BaseSynthesizer):
                             print("Here Lime")
                             # TODO:
 
-                            optimizerD.zero_grad()
-                            # https://machinelearningmastery.com/how-to-implement-wasserstein-loss-for-generative-adversarial-networks/
-                            pen.backward(retain_graph=True)
-                            loss_d.backward()
-                            optimizerD.step()
+                        optimizerD.zero_grad()
+                        # https://machinelearningmastery.com/how-to-implement-wasserstein-loss-for-generative-adversarial-networks/
+                        pen.backward(retain_graph=True)
+                        loss_d.backward()
+                        optimizerD.step()
 
-                            # ---- TensorBoard logging (D) ----
-                            # writer.add_scalar("loss/discriminator_base", float(loss_d_base.detach().cpu()), global_step)
-                            # writer.add_scalar("loss/discriminator_total", float(loss_d.detach().cpu()), global_step)
-                            writer.add_scalars("loss/discriminator", {
-                                "base": float(loss_d_base.detach().cpu()),
-                                "total": float(loss_d.detach().cpu())
-                            }, global_step)
-                            writer.add_scalar("loss/grad_penalty", float(pen.detach().cpu()), global_step)
+                        # ---- TensorBoard logging (D) ----
+                        # writer.add_scalar("loss/discriminator_base", float(loss_d_base.detach().cpu()), global_step)
+                        # writer.add_scalar("loss/discriminator_total", float(loss_d.detach().cpu()), global_step)
+                        writer.add_scalars("loss/discriminator", {
+                            "base": float(loss_d_base.detach().cpu()),
+                            "total": float(loss_d.detach().cpu())
+                        }, global_step)
+                        writer.add_scalar("loss/grad_penalty", float(pen.detach().cpu()), global_step)
 
-                            if last_shap_penalty is not None:
-                                writer.add_scalar("xai/shap_penalty", last_shap_penalty, global_step)  # in [0,2]
-                                writer.add_scalar("xai/spearman_rho", last_spearman_rho, global_step)  # in [-1,1]
+                        if last_shap_penalty is not None:
+                            writer.add_scalar("xai/shap_penalty", last_shap_penalty, global_step)  # in [0,2]
+                            writer.add_scalar("xai/spearman_rho", last_spearman_rho, global_step)  # in [-1,1]
 
-                            if self.private:
-                                #### DP ####
-                                # Weight clipping for privacy guarantee
-                                for param in self._discriminator.parameters():
-                                    param.data.clamp_(-weight_clip, weight_clip)
-                                #### DP ####
+                        if self.private:
+                            #### DP ####
+                            # Weight clipping for privacy guarantee
+                            for param in self._discriminator.parameters():
+                                param.data.clamp_(-weight_clip, weight_clip)
+                            #### DP ####
 
                     fakez = torch.normal(mean=mean, std=std)
                     condvec_pair = self._data_sampler.sample_condvec_pair(self._batch_size)

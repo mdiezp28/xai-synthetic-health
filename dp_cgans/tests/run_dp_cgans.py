@@ -3,8 +3,7 @@ from tabnanny import verbose
 
 import numpy as np
 import pandas as pd
-# from dp_cgans import DP_CGAN, __version__
-from dp_cgans.dp_cgan_init import DP_CGAN
+from dp_cgans import DP_CGAN, __version__
 
 
 def run_dp_cgans(tabular_data, output_file):
@@ -74,7 +73,7 @@ def get_datasets():
 
 
 def main():
-    data_a, data_b, data_c = get_datasets()
+    # data_a, data_b, data_c = get_datasets()
     #
     # os.makedirs("outputs", exist_ok=True)
     # print("Running DP_CGAN test...")
