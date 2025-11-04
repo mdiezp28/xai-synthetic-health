@@ -10,6 +10,7 @@ from packaging import version
 from torch import optim
 from torch.nn import BatchNorm1d, Dropout, LeakyReLU, Linear, Module, ReLU, Sequential, functional, BCEWithLogitsLoss
 from torch.utils.tensorboard import SummaryWriter
+import tensorflow as tf
 import time
 from tqdm import tqdm
 
@@ -32,7 +33,9 @@ import shap
 
 def _spearman_penalty(u: torch.Tensor, v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     """1 - Spearman rank correlation (descending). Returns scalar in [0, 2]."""
-    # ranks (0=lowest importance). Use descending importance by negating.
+    #  1 = identical, then 1 - 1 = 0 penalty
+    # -1 = reversed, then 1 - (-1) = 2 penalty
+    #  0 = uncorrelated, then 1 - 0 = 1 penalty
     r_u = torch.argsort(torch.argsort(-u))
     r_v = torch.argsort(torch.argsort(-v))
     r_u = r_u.float()
@@ -40,9 +43,7 @@ def _spearman_penalty(u: torch.Tensor, v: torch.Tensor, eps: float = 1e-8) -> to
     # Pearson on ranks
     r_u = (r_u - r_u.mean()) / (r_u.std() + eps)
     r_v = (r_v - r_v.mean()) / (r_v.std() + eps)
-    #  1 = identical, then 1 - 1 = 0 penalty
-    # -1 = reversed, then 1 - (-1) = 2 penalty
-    #  0 = uncorrelated, then 1 - 0 = 1 penalty
+    
     return 1.0 - (r_u * r_v).mean()  # higher = worse order match
 
 
@@ -242,7 +243,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                  generator_lr=2e-4, generator_decay=1e-6, discriminator_lr=2e-4,
                  discriminator_decay=1e-6, batch_size=500, discriminator_steps=1,
                  log_frequency=True, verbose=False, epochs=300, pac=10, cuda=True, private=False,
-                 wandb=False, xai=None, conditional_columns=None):
+                 wandb=False, xai=None, xai_weight=0, dataset_name='', conditional_columns=None):
 
         assert batch_size % 2 == 0
 
@@ -266,6 +267,8 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self.conditional_columns = conditional_columns
         self.wandb = wandb
         self.xai = xai
+        self.xai_weight = xai_weight
+        self.dataset_name = dataset_name
 
         if not cuda or not torch.cuda.is_available():
             device = 'cpu'
@@ -520,9 +523,12 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
         # TensorBoard
         run_id = time.strftime("%Y%m%d-%H%M%S")
-        log_dir = f"runs/dpcgan/{run_id}"
+        log_dir = f"runs/{self.dataset_name}/{run_id}"
         writer = SummaryWriter(log_dir=log_dir)
         print(f"[TB] logging to {log_dir}")
+        
+        # Track start time to report total execution duration at the end
+        _train_start_time = time.time()
 
         mean = torch.zeros(self._batch_size, self._embedding_dim, device=self._device)
         std = mean + 1
@@ -633,13 +639,12 @@ class DPCGANSynthesizer(BaseSynthesizer):
                                 self._transformer,
                                 device=self._device)
 
-                            beta = 1e-3
-                            loss_d = loss_d + beta * shap_order_penalty
+                            loss_d = loss_d + self.xai_weight * shap_order_penalty
 
                             print(f"{global_step} (base)loss_d={loss_d_base.item()} "
                                   f"penalty={shap_order_penalty.item()} "
                                   f"shearman_rho={1 - shap_order_penalty.item()} "
-                                  f"beta = {beta}"
+                                  f"beta = {self.xai_weight}"
                                   f"(shap)loss_d={loss_d.item()}")
 
 
@@ -781,6 +786,41 @@ class DPCGANSynthesizer(BaseSynthesizer):
                     ######## ADDED ########
                 if self.wandb == True:
                     wandb.finish()
+
+        try:
+            _elapsed = time.time() - _train_start_time
+        except Exception:
+            _elapsed = float('nan')
+        
+        # Log total execution time and device to TensorBoard at the end
+        # Creates a file writer for the log directory.
+        file_writer = tf.summary.create_file_writer(log_dir)
+
+        # Using the file writer, log the text.
+        with file_writer.as_default():
+            run_lines = [
+                f"Device: {self._device}",
+                f"Rows (transformed): {len(train_data)}",
+                f"Data Dim: {data_dim}",
+                f"Cond Vec Dim: {self._data_sampler.dim_cond_vec()}",
+                f"Batch Size: {self._batch_size}",
+                f"Epochs: {epochs}",
+                f"Discriminator Steps: {self._discriminator_steps}",
+                f"PAC: {self.pac}",
+                f"Generator Dim: {tuple(self._generator_dim)}",
+                f"Discriminator Dim: {tuple(self._discriminator_dim)}",
+                f"Gen LR/Decay: {self._generator_lr}/{self._generator_decay}",
+                f"Disc LR/Decay: {self._discriminator_lr}/{self._discriminator_decay}",
+                f"Log Frequency: {self._log_frequency}",
+                f"Private: {self.private}",
+                f"XAI: {self.xai}",
+                f"XAI Weight: {self.xai_weight}",
+                f"Total Time (s): {(_elapsed if np.isfinite(_elapsed) else 'NaN')}",
+                f"Device: {self._device}",
+
+            ]
+            running_details = "\n".join(run_lines)
+            tf.summary.text("run_summary", running_details, step=global_step if 'global_step' in locals() else 0)
 
         writer.close()
 

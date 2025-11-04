@@ -153,7 +153,9 @@ cd dp_cgans
 ```
 
 > When working in development the `hatch` tool will automatically install and sync the dependencies when running a script. But you can also directly 
-
+```bash
+ xai-synthetic-health\dp_cgans> pip install -e .
+```
 ### Run
 
 Run the library with the CLI:
