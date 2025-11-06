@@ -558,15 +558,15 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self._transformer = DataTransformer()
 
         print("Start transforming data...")
-
-        if os.path.exists(os.getcwd()+'/fitted_transformer.pkl'):
+        transformer_path = os.getcwd()+f'/output/transformer/{self.dataset_name}_fitted_transformer.pkl'
+        if os.path.exists(transformer_path):
             print("Loading fitted transformer...")
-            self._transformer = joblib.load(os.getcwd()+'/fitted_transformer.pkl')
+            self._transformer = joblib.load(transformer_path)
         else:
             print("Start fitting transformer ...")
             self._transformer.fit(train_data, discrete_columns)
             self._transformer.fit(train_data, discrete_columns)
-            joblib.dump(self._transformer, os.getcwd()+'/fitted_transformer.pkl')
+            joblib.dump(self._transformer, transformer_path)
             print("Saving fitted transformer...")
 
         print("Finish transforming data / loading transformed data...")
@@ -604,8 +604,8 @@ class DPCGANSynthesizer(BaseSynthesizer):
         )
 
         # TensorBoard
-        run_id = time.strftime("%Y%m%d-%H%M%S")
-        log_dir = f"runs/{self.dataset_name}/{run_id}"
+        run_id = time.strftime("%d-%mT%H.%M.%S")
+        log_dir = f"runs/{self.dataset_name}/e{self._epochs}_bs{self._batch_size}_xai{self.xai}_beta{self.xai_weight}_{run_id}"
         writer = SummaryWriter(log_dir=log_dir)
         print(f"[TB] logging to {log_dir}")
         
@@ -749,7 +749,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                             real_cat, fake_cat, self._device, self.pac)
 
                         if self.xai == 'SHAP':
-                            print("Here Shap")
+                            # print("Here Shap")
                             shap_order_penalty = self._discriminator.calc_shap_importance_penalty(
                                 real_cat,
                                 fake_cat,
@@ -790,6 +790,8 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         if last_shap_penalty is not None:
                             writer.add_scalar("xai/shap_penalty", last_shap_penalty, global_step)  # in [0,2]
                             writer.add_scalar("xai/spearman_rho", last_spearman_rho, global_step)  # in [-1,1]
+                            r = (self.xai_weight * last_shap_penalty) / (abs(loss_d_base) + 1e-8)
+                            writer.add_scalar("diagnostics/r_ratio", r, global_step)
 
                         if self.private:
                             #### DP ####
@@ -988,7 +990,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
         try:
             _elapsed = time.time() - _train_start_time
         except Exception:
-            _elapsed = float('nan')
+            _elapsed = 0
         
         # Log total execution time and device to TensorBoard at the end
         # Creates a file writer for the log directory.
@@ -1013,12 +1015,11 @@ class DPCGANSynthesizer(BaseSynthesizer):
                 f"Private: {self.private}",
                 f"XAI: {self.xai}",
                 f"XAI Weight: {self.xai_weight}",
-                f"Total Time (s): {(_elapsed if np.isfinite(_elapsed) else 'NaN')}",
-                f"Device: {self._device}",
+                f"Total Time (s): {_elapsed}",
 
             ]
             running_details = "\n".join(run_lines)
-            tf.summary.text("run_summary", running_details, step=global_step if 'global_step' in locals() else 0)
+            tf.summary.text("run_summary", running_details, step=global_step)
 
         writer.close()
 

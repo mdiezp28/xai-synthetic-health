@@ -1,6 +1,10 @@
 loss_output_*.txt
 synthetic_samples.csv
 *.csv
+tests/runs/*
+tests/output/*
+resources/*/
+um-thesis-*.json
 
 # Ingore Mac weird file
 **/.DS_Store
