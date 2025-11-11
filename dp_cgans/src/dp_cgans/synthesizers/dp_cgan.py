@@ -13,7 +13,6 @@ from packaging import version
 from torch import optim
 from torch.nn import BatchNorm1d, Dropout, LeakyReLU, Linear, Module, ReLU, Sequential, functional, BCEWithLogitsLoss
 from torch.utils.tensorboard import SummaryWriter
-import tensorflow as tf
 from tqdm import tqdm
 
 from dp_cgans.synthesizers.data_sampler import DataSampler
@@ -992,34 +991,28 @@ class DPCGANSynthesizer(BaseSynthesizer):
         except Exception:
             _elapsed = 0
         
-        # Log total execution time and device to TensorBoard at the end
-        # Creates a file writer for the log directory.
-        file_writer = tf.summary.create_file_writer(log_dir)
+        run_lines = [
+            f"Device: {self._device}",
+            f"Rows (transformed): {len(train_data)}",
+            f"Data Dim: {data_dim}",
+            f"Cond Vec Dim: {self._data_sampler.dim_cond_vec()}",
+            f"Batch Size: {self._batch_size}",
+            f"Epochs: {epochs}",
+            f"Discriminator Steps: {self._discriminator_steps}",
+            f"PAC: {self.pac}",
+            f"Generator Dim: {tuple(self._generator_dim)}",
+            f"Discriminator Dim: {tuple(self._discriminator_dim)}",
+            f"Gen LR/Decay: {self._generator_lr}/{self._generator_decay}",
+            f"Disc LR/Decay: {self._discriminator_lr}/{self._discriminator_decay}",
+            f"Log Frequency: {self._log_frequency}",
+            f"Private: {self.private}",
+            f"XAI: {self.xai}",
+            f"XAI Weight: {self.xai_weight}",
+            f"Total Time (s): {_elapsed}",
 
-        # Using the file writer, log the text.
-        with file_writer.as_default():
-            run_lines = [
-                f"Device: {self._device}",
-                f"Rows (transformed): {len(train_data)}",
-                f"Data Dim: {data_dim}",
-                f"Cond Vec Dim: {self._data_sampler.dim_cond_vec()}",
-                f"Batch Size: {self._batch_size}",
-                f"Epochs: {epochs}",
-                f"Discriminator Steps: {self._discriminator_steps}",
-                f"PAC: {self.pac}",
-                f"Generator Dim: {tuple(self._generator_dim)}",
-                f"Discriminator Dim: {tuple(self._discriminator_dim)}",
-                f"Gen LR/Decay: {self._generator_lr}/{self._generator_decay}",
-                f"Disc LR/Decay: {self._discriminator_lr}/{self._discriminator_decay}",
-                f"Log Frequency: {self._log_frequency}",
-                f"Private: {self.private}",
-                f"XAI: {self.xai}",
-                f"XAI Weight: {self.xai_weight}",
-                f"Total Time (s): {_elapsed}",
-
-            ]
-            running_details = "\n".join(run_lines)
-            tf.summary.text("run_summary", running_details, step=global_step)
+        ]
+        running_details = "\n".join(run_lines)
+        writer.add_text("run_summary", f"<pre>{running_details}</pre>", int(global_step))
 
         writer.close()
 
