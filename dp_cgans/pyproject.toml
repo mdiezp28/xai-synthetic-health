@@ -40,6 +40,9 @@ dependencies = [
     "typed-ast",
     "tqdm",
     "gensim",
+    "shap",
+    "tensorboard",
+    "packaging",
 ]
 
 
@@ -70,6 +73,7 @@ Source = "https://github.com/sunchang0124/dp_cgans"
 
 # ENVIRONMENTS AND SCRIPTS
 [tool.hatch.envs.default]
+python = "3.11"
 features = [
     "test",
 ]
