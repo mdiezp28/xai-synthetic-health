@@ -739,7 +739,14 @@ class Table:
                     field_data = reversed_data[name]
 
                 reversed_data[name] = field_data[field_data.notnull()].astype(self._dtypes[name])
-        return reversed_data[self._field_names[1:]]
+        keep_columns = []
+        # Ensure we keep all the features, but not the id
+        for name in self._field_names:
+            if name == "IRI":
+                continue
+            if name in reversed_data.columns:
+                keep_columns.append(name)
+        return reversed_data[keep_columns]
 
     def filter_valid(self, data):
         """Filter the data using the constraints and return only the valid rows.
