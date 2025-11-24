@@ -30,31 +30,43 @@ import copy
 import matplotlib.pyplot as plt
 
 import shap
+from scipy.stats import spearmanr
 
 
-def _spearman_penalty(u: torch.Tensor, v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    """1 - Spearman rank correlation (descending). Returns scalar in [0, 2]."""
+def _spearman_penalty_scipy(u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    """
+    1 - Spearman rank correlation using scipy (handles ties correctly).
     #  1 = identical, then 1 - 1 = 0 penalty
     # -1 = reversed, then 1 - (-1) = 2 penalty
     #  0 = uncorrelated, then 1 - 0 = 1 penalty
-    r_u = torch.argsort(torch.argsort(-u))
-    r_v = torch.argsort(torch.argsort(-v))
-    r_u = r_u.float()
-    r_v = r_v.float()
-    # Pearson on ranks
-    r_u = (r_u - r_u.mean()) / (r_u.std() + eps)
-    r_v = (r_v - r_v.mean()) / (r_v.std() + eps)
-    
-    return 1.0 - (r_u * r_v).mean()  # higher = worse order match
+    """
+    # detach -> cpu -> numpy
+    u_np = u.detach().float().cpu().numpy()
+    v_np = v.detach().float().cpu().numpy()
+
+    rho, _ = spearmanr(u_np, v_np)
+    # If one vector is (near) constant, scipy returns nan; treat as zero correlation
+    if np.isnan(rho):
+        rho = 0.0
+
+    penalty = 1.0 - float(rho)
+    return torch.as_tensor(penalty, device=u.device, dtype=u.dtype)
 
 
 def _build_feature_groups(output_info_list):
-    """Optional: group one-hot spans into original columns."""
-    groups, st = [], 0
+    """
+    Build slice indices for grouping expanded features back to original columns.
+    
+    For example, a categorical column with 5 categories becomes 5 one-hot features.
+    This function creates slices to group them back: [slice(0,5), slice(5,8), ...]
+    """
+    groups = []
+    start_idx = 0
+
     for col in output_info_list:
         span = sum(si.dim for si in col)
-        groups.append(slice(st, st + span))
-        st += span
+        groups.append(slice(start_idx, start_idx + span))
+        start_idx += span
     return groups
 
 def _shap_to_torch_matrix(sv, X_like: torch.Tensor) -> torch.Tensor:
@@ -106,36 +118,113 @@ class Discriminator(Module):
         return gradient_penalty
 
     def calc_shap_importance_penalty(self, real_data, fake_data, transformer, device='cpu'):
+        shap_batch_size = 32
+        was_training = self.training
         self.eval()
-        self.enable_rowwise(True)
+        real_data = real_data.detach()
+        fake_data = fake_data.detach()
 
-        bck_s = min(50, real_data.size(0))
-        background = real_data[:bck_s]
+        try:
+            self.enable_rowwise(True)
+            
+            background_size = min(10, real_data.size(0))
+            background = real_data[:background_size]
+            
+            # Calculate SHAP values
+            explainer = shap.DeepExplainer(self, background)
 
-        explainer = shap.DeepExplainer(self, background)
-        sv_real = explainer.shap_values(real_data, check_additivity=False)
-        sv_fake = explainer.shap_values(fake_data, check_additivity=False)
+            indices = torch.randperm(real_data.size(0), device=real_data.device)[:shap_batch_size]
+            real_sample = real_data[indices]
+            fake_sample = fake_data[indices]
+            sv_real = explainer.shap_values(real_sample, check_additivity=False)
+            sv_fake = explainer.shap_values(fake_sample, check_additivity=False)
+            
+            # Convert to torch tensors on correct device
+            sv_real = _shap_to_torch_matrix(sv_real, real_sample)  # [B, F_total]
+            sv_fake = _shap_to_torch_matrix(sv_fake, fake_sample)
+            
+            # From expand features to real number of features
+            data_dim = transformer.output_dimensions
+            
+            # Calculate mean absolute importance per feature
+            imp_real_feat = sv_real[:, :data_dim].abs().mean(dim=0)  # [F_data]
+            imp_fake_feat = sv_fake[:, :data_dim].abs().mean(dim=0)
+            
+            # Group one-hot encoded features back to original columns
+            groups = _build_feature_groups(transformer.output_info_list)
+            imp_real_col = torch.stack([imp_real_feat[sl].sum() for sl in groups])  # [num_cols]
+            imp_fake_col = torch.stack([imp_fake_feat[sl].sum() for sl in groups])
+            
+            # Calculate Spearman rank correlation penalty
+            shap_order_penalty = _spearman_penalty_scipy(imp_fake_col, imp_real_col)
+            
+            return shap_order_penalty
+            
+        finally:
+            # Always restore original state
+            self.enable_rowwise(False)
+            if was_training:
+                self.train()
 
-        # back to normal mode so training continues with packing
-        self.enable_rowwise(False)
-        self.train()
+    def calc_shap_importance_penalty_per_patient(self, real_data, fake_data, transformer, device='cpu'):
+        """
+        Calculate SHAP penalty by comparing individual real vs fake patient pairs.
+        Returns average penalty across multiple patient comparisons.
+        """
+        n_comparisons = 10  # Compare 10 random patient pairs
+        was_training = self.training
+        self.eval()
+        real_data = real_data.detach()
+        fake_data = fake_data.detach()
 
-        sv_real = _shap_to_torch_matrix(sv_real, real_data)  # [B, F_total] torch, correct device
-        sv_fake = _shap_to_torch_matrix(sv_fake, fake_data)
+        try:
+            self.enable_rowwise(True)
+            penalties = []
+            
+            for _ in range(n_comparisons):
+                # Pick one random real patient and one random fake patient
+                idx_real = torch.randint(0, real_data.size(0), (1,), device=real_data.device)
+                idx_fake = torch.randint(0, fake_data.size(0), (1,), device=real_data.device)
+                
+                single_real = real_data[idx_real]  # (1, 248)
+                single_fake = fake_data[idx_fake]  # (1, 248)
+                
+                # Use a small background from real data
+                background_size = min(10, real_data.size(0))
+                background = real_data[:background_size]
+                
+                # Calculate SHAP for this patient pair
+                explainer = shap.DeepExplainer(self, background)
+                sv_real = explainer.shap_values(single_real, check_additivity=False)
+                sv_fake = explainer.shap_values(single_fake, check_additivity=False)
+                
+                # Convert to torch
+                sv_real = _shap_to_torch_matrix(sv_real, single_real)  # (1, 248)
+                sv_fake = _shap_to_torch_matrix(sv_fake, single_fake)  # (1, 248)
+                
+                # Get feature importance for this single patient
+                data_dim = transformer.output_dimensions
+                imp_real_feat = sv_real[0, :data_dim].abs()  # (198,) - single patient
+                imp_fake_feat = sv_fake[0, :data_dim].abs()  # (198,)
+                
+                # Group to original columns
+                groups = _build_feature_groups(transformer.output_info_list)
+                imp_real_col = torch.stack([imp_real_feat[sl].sum() for sl in groups])
+                imp_fake_col = torch.stack([imp_fake_feat[sl].sum() for sl in groups])
+                
+                # Calculate penalty for this patient pair
+                penalty = _spearman_penalty_scipy(imp_fake_col, imp_real_col)
+                penalties.append(penalty)
+            
+            # Average penalty across all patient pairs
+            avg_penalty = torch.stack(penalties).mean()
+            return avg_penalty
+            
+        finally:
+            self.enable_rowwise(False)
+            if was_training:
+                self.train()
 
-        # From expand features to real number of features
-        data_dim = transformer.output_dimensions
-        imp_real_feat = sv_real[:, :data_dim].abs().mean(dim=0)  # [F_data]
-        imp_fake_feat = sv_fake[:, :data_dim].abs().mean(dim=0)  # [F_data]
-
-        groups = _build_feature_groups(transformer.output_info_list)
-        imp_real_col = torch.stack([imp_real_feat[sl].sum() for sl in groups])  # [num_cols]
-        imp_fake_col = torch.stack([imp_fake_feat[sl].sum() for sl in groups])  # [num_cols]
-
-        # Spearman order penalty - batch level (change to patient level?)
-        shap_order_penalty = _spearman_penalty(imp_fake_col.detach(), imp_real_col.detach())
-
-        return shap_order_penalty
 
     def enable_rowwise(self, flag: bool = True):
         self._rowwise_mode = bool(flag)
@@ -364,6 +453,9 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self._data_sampler = None
         self._generator = None
         self._discriminator = None
+
+        self.xai_penalty_ema = 0.0 # exponential moving average of xai penalty
+        self.xai_calc_freq = 10  # calculate xai penalty every n steps
 
 
     @staticmethod
@@ -747,17 +839,27 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         shap_penalty = None
                         spearman_rho = None
                         if self.xai == 'SHAP':
-                            shap_order_penalty = self._discriminator.calc_shap_importance_penalty(
-                            real_cat,
-                            fake_cat,
-                            self._transformer,
-                            device=self._device)
+                            if global_step % self.xai_calc_freq == 0:
+                                shap_order_penalty = self._discriminator.calc_shap_importance_penalty(
+                                real_cat,
+                                fake_cat,
+                                self._transformer,
+                                device=self._device)
+                                # shap_order_penalty = self._discriminator.calc_shap_importance_penalty_per_patient(
+                                #     real_cat,
+                                #     fake_cat,
+                                #     self._transformer,
+                                #     device=self._device)
 
-                            loss_d = loss_d + self.xai_weight * shap_order_penalty
+                                writer.add_scalar("xai/shap_order_penalty", shap_order_penalty.item(), global_step) 
 
-                            shap_penalty = float(shap_order_penalty.detach().cpu())
-                            spearman_rho = 1.0 - shap_penalty
+                                self.xai_penalty_ema = 0.9 * self.xai_penalty_ema + 0.1 * shap_order_penalty.item()
+                                
+                            loss_d = loss_d + self.xai_weight * self.xai_penalty_ema
                             
+                            shap_penalty = self.xai_penalty_ema
+                            spearman_rho = 1.0 - shap_penalty
+
                         elif self.xai == 'LIME':
                             print("Here Lime")
                             # TODO:
