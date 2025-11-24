@@ -737,16 +737,12 @@ class Table:
                     field_data = pd.Series(Table._get_fake_values(field_metadata, len(reversed_data)))
                 else:
                     field_data = reversed_data[name]
-
                 reversed_data[name] = field_data[field_data.notnull()].astype(self._dtypes[name])
-        keep_columns = []
-        # Ensure we keep all the features, but not the id
-        for name in self._field_names:
-            if name == "IRI":
-                continue
-            if name in reversed_data.columns:
-                keep_columns.append(name)
-        return reversed_data[keep_columns]
+            
+            
+            final_columns = [col for col in self._field_names if col != 'IRI']
+
+            return reversed_data[final_columns]
 
     def filter_valid(self, data):
         """Filter the data using the constraints and return only the valid rows.
