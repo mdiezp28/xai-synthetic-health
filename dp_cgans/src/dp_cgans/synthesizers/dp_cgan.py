@@ -118,7 +118,7 @@ class Discriminator(Module):
         return gradient_penalty
 
     def calc_shap_importance_penalty(self, real_data, fake_data, transformer, device='cpu'):
-        shap_batch_size = 32
+        shap_batch_size = real_data.size(0) // 4  # Use 1/4 batch for SHAP to save memory
         was_training = self.training
         self.eval()
         real_data = real_data.detach()
@@ -126,16 +126,21 @@ class Discriminator(Module):
 
         try:
             self.enable_rowwise(True)
-            
-            background_size = min(10, real_data.size(0))
-            background = real_data[:background_size]
-            
-            # Calculate SHAP values
-            explainer = shap.DeepExplainer(self, background)
 
-            indices = torch.randperm(real_data.size(0), device=real_data.device)[:shap_batch_size]
-            real_sample = real_data[indices]
-            fake_sample = fake_data[indices]
+            # if self._shap_background is None or every x epochs:           
+            background_size = min(100, real_data.size(0))
+            # get background samples from real data randomly
+            # bck_indice = torch.randperm(real_data.size(0), device=real_data.device)[:background_size]
+          
+          
+            shap_background = real_data[:background_size]
+        
+            # Calculate SHAP values
+            explainer = shap.DeepExplainer(self, shap_background)
+
+            # indices = torch.randperm(real_data.size(0), device=real_data.device)[:shap_batch_size]
+            real_sample = real_data[:shap_batch_size]
+            fake_sample = fake_data[:shap_batch_size]
             sv_real = explainer.shap_values(real_sample, check_additivity=False)
             sv_fake = explainer.shap_values(fake_sample, check_additivity=False)
             
@@ -455,7 +460,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self._discriminator = None
 
         self.xai_penalty_ema = 0.0 # exponential moving average of xai penalty
-        self.xai_calc_freq = 10  # calculate xai penalty every n steps
+        self.smooth_xai = 0.3 # 1: no smoothing, 0.3:moderate smoothing, 0.1: strong smoothing
 
 
     @staticmethod
@@ -729,7 +734,6 @@ class DPCGANSynthesizer(BaseSynthesizer):
         print(f"  Data shape: {train_data.shape}")
         print(f"  Prefetching: DISABLED (direct sampling - threading caused contention)")
 
-        global_step = 0
 
         print(f"{datetime.now()}", 'epoch: ', epoch_iterator)
         filename = f'loss_output_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
@@ -839,7 +843,8 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         shap_penalty = None
                         spearman_rho = None
                         if self.xai == 'SHAP':
-                            if global_step % self.xai_calc_freq == 0:
+
+                            if id_ == 0 and  n == 0:
                                 shap_order_penalty = self._discriminator.calc_shap_importance_penalty(
                                 real_cat,
                                 fake_cat,
@@ -850,20 +855,41 @@ class DPCGANSynthesizer(BaseSynthesizer):
                                 #     fake_cat,
                                 #     self._transformer,
                                 #     device=self._device)
+                                raw_shap_penalty = shap_order_penalty.item() # [0,2]
+                                spearman_rho = 1.0 - raw_shap_penalty # in [-1,1]                                
+                                norm_shap_penalty = raw_shap_penalty / 2.0  # normalize to [0,1]
 
-                                writer.add_scalar("xai/shap_order_penalty", shap_order_penalty.item(), global_step) 
-
-                                self.xai_penalty_ema = 0.9 * self.xai_penalty_ema + 0.1 * shap_order_penalty.item()
+                                if self.xai_penalty_ema == 0.0:
+                                    self.xai_penalty_ema = norm_shap_penalty
+                                else:
+                                    self.xai_penalty_ema = (1 - self.smooth_xai) * self.xai_penalty_ema + self.smooth_xai * norm_shap_penalty
                                 
-                            loss_d = loss_d + self.xai_weight * self.xai_penalty_ema
-                            
-                            shap_penalty = self.xai_penalty_ema
-                            spearman_rho = 1.0 - shap_penalty
+                                # logging
+                                writer.add_scalar("xai/spearman_rho", spearman_rho, i) 
+                                writer.add_scalar("xai/shap_penalty_raw", raw_shap_penalty, i) 
+                                writer.add_scalar("xai/shap_penalty", self.xai_penalty_ema, i) 
 
+                            shap_penalty = self.xai_penalty_ema
+                            beta = self.xai_weight
+                            # if i < 20:
+                            #     beta = self.xai_weight * 3
+                            
+                            # elif i < 50:
+                            #     beta = self.xai_weight * 2.5
+                            # elif i < 100:
+                            #     beta = self.xai_weight * 2
+                            
+                            shap_penalty_with_beta = beta * shap_penalty
+                            loss_d = loss_d + shap_penalty_with_beta
+                            
+                            writer.add_scalar("xai/beta_times_penalty", shap_penalty_with_beta, i)                            
+
+                            r = shap_penalty_with_beta / (torch.abs(loss_d_base) + 1e-8)
+                            writer.add_scalar("diagnostics/r_ratio", r, i)
+                                
                         elif self.xai == 'LIME':
                             print("Here Lime")
                             # TODO:
-
 
                         optimizerD.zero_grad()
                         # https://machinelearningmastery.com/how-to-implement-wasserstein-loss-for-generative-adversarial-networks/
@@ -872,24 +898,15 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         optimizerD.step()
 
                         # ---- TensorBoard logging (D) ----
-                        base_abs = float(torch.abs(loss_d_base.detach()).cpu())
                         total_val = float(loss_d.detach().cpu())
                         pen_val = float(pen.detach().cpu())
 
                         writer.add_scalars("loss/discriminator", {
                             "base": float(loss_d_base.detach().cpu()),
                             "total": total_val
-                        }, global_step)
-                        writer.add_scalar("loss/grad_penalty", pen_val, global_step)
+                        }, i)
+                        writer.add_scalar("loss/grad_penalty", pen_val, i)
 
-                        if shap_penalty is not None:
-                            beta_times_pen = float(self.xai_weight) * shap_penalty
-                            writer.add_scalar("xai/shap_penalty", shap_penalty, global_step)  # in [0,2]
-                            writer.add_scalar("xai/beta_times_penalty", beta_times_pen, global_step)
-                            writer.add_scalar("xai/spearman_rho", spearman_rho, global_step)  # in [-1,1]
-
-                            r = beta_times_pen / (base_abs + 1e-8)
-                            writer.add_scalar("diagnostics/r_ratio", r, global_step)
 
                         if self.private:
                             #### DP ####
@@ -970,7 +987,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         timing_stats['step_total'].append(step_total_time)
 
                     # ----- TensorBoard G
-                    writer.add_scalar("loss/generator", float(loss_g.detach().cpu()), global_step)
+                    writer.add_scalar("loss/generator", float(loss_g.detach().cpu()), i)
 
                 generator_loss = loss_g.detach().cpu().item()
                 discriminator_loss = loss_d.detach().cpu().item()
@@ -1079,7 +1096,6 @@ class DPCGANSynthesizer(BaseSynthesizer):
                 if self.wandb == True:
                     wandb.finish()
 
-                global_step += 1
 
             # Stop the prefetcher after training (if enabled)
             if prefetcher:
@@ -1110,7 +1126,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
             f"Total Time (s): {_elapsed}",
         ]
         running_details = "\n".join(run_lines)
-        writer.add_text("run_summary", f"<pre>{running_details}</pre>", int(global_step))
+        writer.add_text("run_summary", f"<pre>{running_details}</pre>", epochs)
 
         writer.close()
 
