@@ -736,7 +736,8 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
 
         print(f"{datetime.now()}", 'epoch: ', epoch_iterator)
-        filename = f'loss_output_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
+        os.makedirs('logs', exist_ok=True)
+        filename = f'logs/loss_output_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
         with open(filename, 'w') as loss_file:
             loss_file.write("Epoch,Generator_Loss,Discriminator_Loss,Timestamp\n")
             for i in epoch_iterator:
