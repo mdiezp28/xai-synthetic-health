@@ -1,0 +1,403 @@
+{
+    "fields": {
+        "subject_id": {
+            "type": "numerical",
+            "subtype": "id",
+            "transformer": "integer"
+        },
+        "race": {
+            "type": "categorical",
+            "transformer": "one_hot_encoding"
+        },
+        "gender": {
+            "type": "categorical",
+            "transformer": "one_hot_encoding"
+        },
+        "age": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "weight": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "insurance": {
+            "type": "categorical",
+            "transformer": "one_hot_encoding"
+        },
+        "los": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "aki": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "ckd": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "diabetes_with_cc": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "diabetes_without_cc": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "cardiac_disease": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "hypertension": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "copd": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "ph_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "ph_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "ph_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "calcium_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "calcium_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "calcium_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "creatinine_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "creatinine_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "creatinine_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "hemoglobin_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "hemoglobin_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "hemoglobin_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "wbc_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "wbc_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "wbc_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "lactate_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "lactate_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "lactate_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "platelet_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "platelet_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "platelet_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "potassium_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "potassium_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "potassium_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "sodium_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "sodium_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "sodium_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "glucose_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "glucose_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "glucose_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "chloride_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "chloride_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "chloride_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "bun_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "bun_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "bun_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "osmolality_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "osmolality_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "osmolality_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "anion_gap_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "anion_gap_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "anion_gap_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "bicarbonate_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "bicarbonate_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "bicarbonate_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "heart_rate_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "heart_rate_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "mbp_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "mbp_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "mbp_min": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "temperature_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "resp_rate_initial": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "resp_rate_max": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "urineoutput": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "apsiii": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "sofa": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "gcs": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "cns": {
+            "type": "numerical",
+            "subtype": "float",
+            "transformer": "float"
+        },
+        "renal": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "ventilation": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "nitroprusside": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "vasopressor": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "albumin": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "in_hospital_death": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        },
+        "emergency": {
+            "type": "numerical",
+            "subtype": "integer",
+            "transformer": "integer"
+        }
+    },
+    "constraints": [],
+    "model_kwargs": {},
+    "name": null,
+    "primary_key": null,
+    "sequence_index": null,
+    "entity_columns": [],
+    "context_columns": []
+}
