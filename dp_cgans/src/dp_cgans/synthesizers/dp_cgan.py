@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 
 import shap
 from scipy.stats import spearmanr
+from lime import lime_tabular
 
 
 def _spearman_penalty_scipy(u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
@@ -226,6 +227,89 @@ class Discriminator(Module):
             return avg_penalty
             
         finally:
+            self.enable_rowwise(False)
+            if was_training:
+                self.train()
+
+    def calc_lime_importance_penalty(self, real_data, fake_data, transformer, device='cpu'):
+        lime_batch_size = real_data.size(0) // 4
+
+        was_training = self.training
+        self.eval()
+
+        real_data_np = real_data.detach().cpu().numpy()
+        fake_data_np = fake_data.detach().cpu().numpy()
+        try:
+            self.enable_rowwise(True) 
+
+            background_size = min(100, real_data.size(0))
+            lime_background = real_data_np[:background_size]
+
+            # Prediction function for LIME
+            def predict_fn(x):
+                with torch.no_grad():
+                    x_tensor = torch.FloatTensor(x).to(device)
+                    logits = self(x_tensor).cpu().numpy().flatten()
+                    probs = 1 / (1 + np.exp(-logits))  # sigmoid
+                    return np.column_stack([1 - probs, probs])
+                
+            # Create LIME explainer
+            explainer = lime_tabular.LimeTabularExplainer(lime_background, mode="classification", discretize_continuous=False)
+
+            # sample data
+            real_sample = real_data_np[:lime_batch_size]
+            fake_sample = fake_data_np[:lime_batch_size]
+            
+            # From expand features to real number of features
+            data_dim = transformer.output_dimensions
+            
+            lime_values_real = []
+            for sample in real_sample:
+                exp = explainer.explain_instance(
+                    sample,
+                    predict_fn,
+                    num_features=data_dim,
+                    num_samples=500  # Adjust for speed vs accuracy
+                )
+                # Extract importances as dict: {feature_idx: importance}
+                imp_dict = dict(exp.as_map()[1])  # Class 1 (real)
+                # Convert to array aligned by feature index
+                imp_array = np.array([imp_dict.get(i, 0.0) for i in range(data_dim)])
+                lime_values_real.append(imp_array)
+            
+            # Calculate LIME values for fake samples
+            lime_values_fake = []
+            for sample in fake_sample:
+                exp = explainer.explain_instance(
+                    sample,
+                    predict_fn,
+                    num_features=data_dim,
+                    num_samples=500
+                )
+                imp_dict = dict(exp.as_map()[1])
+                imp_array = np.array([imp_dict.get(i, 0.0) for i in range(data_dim)])
+                lime_values_fake.append(imp_array)
+
+            # Convert to torch tensors [B, F_data]
+            lv_real = torch.FloatTensor(np.array(lime_values_real)).to(device)
+            lv_fake = torch.FloatTensor(np.array(lime_values_fake)).to(device)
+            
+            # Calculate mean absolute importance per feature
+            imp_real_feat = lv_real.abs().mean(dim=0)  # [F_data]
+            imp_fake_feat = lv_fake.abs().mean(dim=0)
+            
+            # Group one-hot encoded features back to original columns
+            groups = _build_feature_groups(transformer.output_info_list)
+            imp_real_col = torch.stack([imp_real_feat[sl].sum() for sl in groups])  # [num_cols]
+            imp_fake_col = torch.stack([imp_fake_feat[sl].sum() for sl in groups])
+            
+            # Calculate Spearman rank correlation penalty
+            lime_order_penalty = _spearman_penalty_scipy(imp_fake_col, imp_real_col)
+
+            return lime_order_penalty
+            
+        finally:
+            # Always restore original state
             self.enable_rowwise(False)
             if was_training:
                 self.train()
@@ -661,7 +745,6 @@ class DPCGANSynthesizer(BaseSynthesizer):
         else:
             print("Start fitting transformer ...")
             self._transformer.fit(train_data, discrete_columns)
-            self._transformer.fit(train_data, discrete_columns)
             joblib.dump(self._transformer, transformer_path)
             print("Saving fitted transformer...")
 
@@ -887,10 +970,38 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
                             r = shap_penalty_with_beta / (torch.abs(loss_d_base) + 1e-8)
                             writer.add_scalar("diagnostics/r_ratio", r, i)
+                            writer.flush()
                                 
                         elif self.xai == 'LIME':
-                            print("Here Lime")
-                            # TODO:
+                            if id_ == 0 and  n == 0:
+                                lime_order_penalty = self._discriminator.calc_lime_importance_penalty(
+                                    real_cat,
+                                    fake_cat,
+                                    self._transformer,
+                                    device=self._device)
+                                raw_lime_penalty = lime_order_penalty.item() # [0,2]
+                                spearman_rho = 1.0 - raw_lime_penalty # in [-1,1]                                
+                                norm_lime_penalty = raw_lime_penalty / 2.0  # normalize to [0,1]
+
+                                if self.xai_penalty_ema == 0.0:
+                                    self.xai_penalty_ema = norm_lime_penalty
+                                else:
+                                    self.xai_penalty_ema = (1 - self.smooth_xai) * self.xai_penalty_ema + self.smooth_xai * norm_lime_penalty
+
+                                # logging
+                                writer.add_scalar("xai/spearman_rho", spearman_rho, i) 
+                                writer.add_scalar("xai/lime_penalty_raw", raw_lime_penalty, i) 
+                                writer.add_scalar("xai/lime_penalty", self.xai_penalty_ema, i) 
+                            
+                            lime_penalty = self.xai_penalty_ema
+                            beta = self.xai_weight
+                            lime_penalty_with_beta = beta * lime_penalty
+                            loss_d = loss_d + lime_penalty_with_beta
+
+                            writer.add_scalar("xai/beta_times_penalty", lime_penalty_with_beta, i)
+                            r = lime_penalty_with_beta / (torch.abs(loss_d_base) + 1e-8)
+                            writer.add_scalar("diagnostics/r_ratio", r, i)
+                            writer.flush()
 
                         optimizerD.zero_grad()
                         # https://machinelearningmastery.com/how-to-implement-wasserstein-loss-for-generative-adversarial-networks/
