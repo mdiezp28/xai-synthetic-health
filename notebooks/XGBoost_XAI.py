@@ -1,5 +1,4 @@
 # %% import libraries
-import math
 import os
 from pathlib import Path
 
@@ -18,44 +17,33 @@ from sklearn.model_selection import GridSearchCV
 import shap
 from sklearn.utils import resample
 import seaborn as sns
+from mice_imputation import MICE_Imputer
+import evaluation.utils as utils
+import sampling
+
 
 # %%
 def ensure_dir(path):
     Path(path).mkdir(parents=True, exist_ok=True)
 
 # %% Clean the data (split the data from the outcome)
-def get_clean_data(dataset, features=None, drop_na=False, target_col="in_hospital_death"):
+def get_raw_xy(dataset, target_col="in_hospital_death"):
     # Prepare data
     x = dataset.drop(target_col, axis=1)  # Exclude outcome
     y = dataset[target_col]
 
     x = x.loc[:, ~x.columns.str.contains(
-        r'^Unnamed|^subject_id$|patient_id|id$|index|level_0', 
+        r'^Unnamed|subject_id', 
         case=False, regex=True
     )]
-    # if dataset has 'subject_id', drop it
-    # if 'subject_id' in x.columns:
-    #     x = x.drop('subject_id', axis=1)
-    x_encoded = pd.get_dummies(x, prefix_sep='__')
-    if features is not None:
-        x_encoded = x_encoded[features]
-    if drop_na:
-        x_encoded = x_encoded.dropna()
-
-    y_aligned = y.loc[x_encoded.index]
-
-    return  x_encoded.astype(float), y_aligned
+    return  x, y
 
 # %%
 def normalise_data(train, test):
     scaler = StandardScaler()
-    train_scaled_np = scaler.fit_transform(train)
-    test_scaled_np = scaler.transform(test)
-
-    train_scaled_df = pd.DataFrame(train_scaled_np, index=train.index, columns=train.columns)
-    test_scaled_df = pd.DataFrame(test_scaled_np, index=test.index, columns=test.columns)
-
-    return train_scaled_np, test_scaled_np, train_scaled_df, test_scaled_df, scaler
+    train_scaled = scaler.fit_transform(train)
+    test_scaled = scaler.transform(test)
+    return train_scaled, test_scaled
 
 
 # %% # Calculate scale_pos_weight for class imbalance
@@ -96,15 +84,20 @@ def find_best_params(x_train, y_train):
 
 def train_xgboost(x_train, y_train):
     model_xgb = xgb.XGBClassifier(
-        n_estimators=100,
-        max_depth=3, # paper 3 [3, 4]
+        n_estimators=150,
+        max_depth=4, # paper 3 [3, 4]
         learning_rate=0.1,
         gamma=0.1, # paper 0.25 [0, 0.1]
-        colsample_bytree=1,
-        min_child_weight=1,
+        colsample_bytree=0.7,
+        min_child_weight=5,
         subsample=0.7, # paper 0.5 [0.6, 0.8]
         scale_pos_weight=get_scale_pos_weight(y_train),
-        eval_metric='auc'
+        eval_metric='auc',
+        max_delta_step=1,
+        reg_alpha=0.3,
+        reg_lambda=2.0,
+        # colsample_bytree=0.7,  # Only use 50% of features per tree
+        # colsample_bylevel=0.8,  # Additional sampling at each level
     )
     model_xgb.fit(x_train, y_train)
     return model_xgb
@@ -143,14 +136,11 @@ def evaluate_model(model, x_test, y_test):
             accuracy=accuracy, 
             sensitivity=sensitivity, 
             specificity=specificity, 
-            auc=auc,
-            auprc=auprc, 
             precision=precision, 
             f1=f1,
-            tn=tn,
-            fp=fp,
-            fn=fn,
-            tp=tp,
+            auc=auc,
+            auprc=auprc, 
+            confusion_matrix= f"tn:{tn} fp:{fp} fn:{fn} tp:{tp}"
         ),
     }
 
@@ -252,10 +242,7 @@ def add_threshold_to_predictions(y_pred_proba, y_test, threshold=0.015):
             specificity_adj=specificity,
             precision_adj=precision,
             f1_adj=f1,
-            tn_adj=tn_adj,
-            fp_adj=fp_adj,
-            fn_adj=fn_adj,
-            tp_adj=tp_adj,
+            confusion_matrix_adj= f"tn:{tn_adj} fp:{fp_adj} fn:{fn_adj} tp:{tp_adj}"
         ),
     }
 
@@ -278,10 +265,11 @@ def show_feature_importance(df, filename, top_n=30):
     plt.title(f'Top {len(top_feats)} Feature Importances (XGBoost)')
     plt.tight_layout()
     plt.savefig(filename+'_feature_importance.png')
-    plt.show()
+    # plt.show()
+    plt.close()
 
 # %%
-def generate_shap_explanations(model_xgb, x_train_df, feat_imp_df, filename):
+def generate_shap_explanations(model_xgb, x_train_df, filename):
     # SHAP explainer
     explainer = shap.TreeExplainer(model_xgb)
     shap_values = explainer(x_train_df)
@@ -405,7 +393,8 @@ def plot_calibration(eva, model, x_test_np, y_test, filename):
     plt.legend()
     plt.grid(True)
     plt.savefig(filename + '_calibration.png')
-    plt.show()
+    # plt.show()
+    plt.close()
 
 def plot_predicted_probabilities(eva, threshold, y_test, filename):
     y_pred_proba = eva["y_pred_proba"]
@@ -419,7 +408,8 @@ def plot_predicted_probabilities(eva, threshold, y_test, filename):
     plt.title('Predicted Probabilities vs True Outcome')
     plt.colorbar(label='True outcome (0=Survived, 1=Died)')
     plt.savefig(filename + '_predicted_prob.png')
-    plt.show()
+    # plt.show()
+    plt.close()
 
 
 def plot_roc_curve(fpr, tpr, thresholds, idx, auc, filename):
@@ -436,7 +426,8 @@ def plot_roc_curve(fpr, tpr, thresholds, idx, auc, filename):
     plt.legend(loc="lower right")
     plt.tight_layout()
     plt.savefig(filename + '_roc_curve.png')
-    plt.show()
+    # plt.show()
+    plt.close()
 
 
 def group_dummy_feature_importance(feat_imp_df, sep = "__"):
@@ -455,31 +446,53 @@ def group_dummy_feature_importance(feat_imp_df, sep = "__"):
 
     
 # %%
-def run_experiment(train_data, test_data=None, features=None, normalise=False, out_dir="outputs", exp_name="experiment"):
+def run_experiment(train_data, test_data=None, impute=False, categorical_cols=None, normalise=False, out_dir="outputs", exp_name="experiment"):
     ensure_dir(out_dir)
     filename = os.path.join(out_dir, exp_name)
-    X, y = get_clean_data(train_data, features)
+
+    X, y = get_raw_xy(train_data)
     if test_data is None:
         # Split data (stratify - ensures class balance is maintained)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
     else:
-        X_test_raw, y_test_raw = get_clean_data(test_data, features=features)
+        X_test, y_test = get_raw_xy(test_data)
         X_train, y_train = X, y
-        X_test, _ = X_test_raw.align(X_train, join="left", axis=1)
-        X_test = X_test.fillna(0)
-        y_test = y_test_raw
+       
+    X_train = X_train.reset_index(drop=True)
+    y_train = y_train.reset_index(drop=True)
+    X_test = X_test.reset_index(drop=True)
+    y_test = y_test.reset_index(drop=True)
 
     print(f"Num of train data: {len(X_train)}. Num of test data: {len(X_test)}")
     print(f"Train Outcome: {y_train.value_counts()}")
     print(f"Test Outcome: {y_test.value_counts()}")
 
+    if impute:
+        print("Imputing missing data...")
+        imputer = MICE_Imputer(X_train, categorical_cols)
+        X_train = imputer.transform_train()
+        X_test = imputer.transform_test(X_test)
+        print("Imputation complete.")
+
+    # Encode categorical variables
+    X_train = pd.get_dummies(X_train, prefix_sep='__')
+    X_test = pd.get_dummies(X_test, prefix_sep='__')
+
+    X_test = X_test.reindex(columns=X_train.columns, fill_value=0)     
+
     if normalise:
         print("Normalising data...")
-        x_train_np, x_test_np, x_train_df, x_test_df_scaled, scaler = normalise_data(X_train, X_test)
+        x_train_np, x_test_np = normalise_data(X_train, X_test)
+
+        X_train_model = pd.DataFrame(x_train_np, columns=X_train.columns, index=X_train.index)
+        X_test_model  = pd.DataFrame(x_test_np,  columns=X_test.columns,  index=X_test.index)
     else:
+        X_train_model = X_train.copy()
+        X_test_model  = X_test.copy()
         x_train_np = X_train.values
         x_test_np = X_test.values
-        x_train_df = X_train.copy()
+
+   
 
     # find_best_params(X_train, y_train)
     print("Training XGBoost model...")
@@ -496,16 +509,24 @@ def run_experiment(train_data, test_data=None, features=None, normalise=False, o
     # Save evaluation metrics
     evaluation = pd.concat([pd.DataFrame([eva["metrics"]]), pd.DataFrame([eva_adj["metrics"]])], axis=1)
     evaluation["threshold"] = best_threshold
-    evaluation.to_csv(filename + '_evaluation_metrics.csv', index=False)
+    evaluation.insert(0, "run_name", exp_name)
 
+    csv_path = Path(out_dir).parent / "evaluation_metrics.csv"
+    evaluation.to_csv(csv_path,
+                       mode='a',
+                       header = not os.path.exists(csv_path),
+                       index=False)
     plot_calibration(eva, model_xgb, x_test_np, y_test, filename)
     plot_predicted_probabilities(eva, best_threshold, y_test, filename)
 
     # Get feature importance
     imp = model_xgb.feature_importances_
-    features = X.columns
+    features = X_train.columns
     feat_imp_df = get_feature_imp_df(imp, features)
     feat_imp_grouped = group_dummy_feature_importance(feat_imp_df)
+    # Save importance to CSV
+    feat_imp_df.to_csv(filename + '_feature_importance.csv', index=False)
+    feat_imp_grouped.to_csv(filename + '_feature_importance_grouped.csv', index=False)
     # "weight": number of times a feature appears in trees
     # "gain": average gain from splits using the feature (often most informative)
     # "cover": number of observations related to splits
@@ -520,18 +541,23 @@ def run_experiment(train_data, test_data=None, features=None, normalise=False, o
     print("Feature importance plot saved")
 
     print("Genarating SHAP explanations...")
-    feature_importance_shap, feature_importance_shap_grouped = generate_shap_explanations(model_xgb, x_train_df, feat_imp_df, filename)
+    feature_importance_shap, feature_importance_shap_grouped = generate_shap_explanations(model_xgb, X_train_model, filename)
+    feature_importance_shap.to_csv(filename + '_feature_importance_shap.csv', index=False)
+    feature_importance_shap_grouped.to_csv(filename + '_feature_importance_shap_grouped.csv', index=False)
     print("SHAP explanations generated and saved.")
 
     print("Generating LIME explanations...")
-    nan_rows = X.isna().any(axis=1)
+    nan_rows = X_train.isna().any(axis=1)
     num_rows_to_remove = nan_rows.sum()
     if num_rows_to_remove == 0:
-        generate_lime_explanations(model_xgb, x_train_df, feat_imp_df, filename, num_samples=3)
+        generate_lime_explanations(model_xgb, X_train_model, feat_imp_df, filename, num_samples=3)
     else:
         print("Skipping LIME (found NaNs).")
 
     return feat_imp_df, feat_imp_grouped, feature_importance_shap, feature_importance_shap_grouped
+
+
+
 
 def main():
     folder = "C:/Users/maria/Code/master/xai-synthetic-health/notebooks/"
@@ -664,56 +690,66 @@ def main():
     #     normalise=True)
     #
     # print(feature_importance_shap)
+def run_experiment_list(synthetic_data, train_data, test_data, result_path, data_name, impute=False):
+    synthetic_data = sampling.post_process_synthetic_data(synthetic_data, True)
+    # Before running the experiment, check for inf values
+    normalise_data = True
+    categorical_cols=["gender", "race", "insurance"]
+    result_path = result_path + data_name + "/"
+
+    print("Experiment 1: \n Training data: Synthetic data.\n Test data: real test data.")
+    exp_name = "exp1_" + data_name
+    run_experiment(
+        train_data=synthetic_data, 
+        test_data=test_data,
+        out_dir=result_path+exp_name+"/",
+        exp_name=exp_name,
+        impute=impute,
+        normalise=normalise_data,
+        categorical_cols=categorical_cols,
+    )
+    
+    print("Experiment 2: \n Training data: Hybrid data.\n Test data: real test data.")
+    percentages = [0.1, 0.3, 0.5, 0.7]
+    for perc in percentages:
+        exp_name = f"exp2_{data_name}_{int(perc*100)}perc"
+
+        hybrid_data = utils.get_hybrid_data_constant_size(
+            real_data=train_data,
+            syn_data=synthetic_data,
+            syn_data_percentage=perc
+        )
+        run_experiment(
+            train_data=hybrid_data, 
+            test_data=test_data,
+            out_dir=result_path+exp_name+"/",
+            exp_name=exp_name,
+            impute=impute,
+            normalise=normalise_data,
+            categorical_cols=categorical_cols,
+        )
+
+
+    print("Experiment 3: \n Training data: Hybrid data - Augmentation.\n Test data: real test data.")
+    percentages = [0.1, 0.3, 0.5, 0.7]
+    for perc in percentages:
+        exp_name = f"exp3_{data_name}_{int(perc*100)}perc"
+
+        hybrid_data = utils.get_hybrid_data_augmentation(
+            real_data=train_data,
+            syn_data=synthetic_data,
+            syn_data_percentage=perc
+        )
+        run_experiment(
+            train_data=hybrid_data, 
+            test_data=test_data,
+            out_dir=result_path+exp_name+"/",
+            exp_name=exp_name,
+            impute=impute,
+            normalise=normalise_data,
+            categorical_cols=categorical_cols,
+        )
 
 
 if __name__ == "__main__":
     main()
-
-
-# def create_datasets():
-    # 1 Save new dataset with features from the paper
-    # non_pre_dataset[paper_features + ['in_hospital_death']].to_csv(os.path.join(folder, 'paper_features_icu_dka_dataset.csv'), index=False)
-    # # 2 Save new dataset with features importance > 0.001 based on XGBoost
-    # non_pre_dataset[filter_features_3['feature'].tolist() + ['in_hospital_death']].to_csv(os.path.join(folder, 'xgboost_important_features_icu_dka_dataset.csv'), index=False)
-    # # 3 Save new dataset with top 30 features importance based on XGBoost
-    # non_pre_dataset[feat_imp_grouped['feature'].head(30).tolist() + ['in_hospital_death']].to_csv(os.path.join(folder, 'xgboost_30_important_features_icu_dka_dataset.csv'), index=False)
-    #
-    # # 4 Save new dataset with features importance > 0.001 based on SHAP
-    # non_pre_dataset[filter_features_2['feature'].tolist() + ['in_hospital_death']].to_csv(os.path.join(folder, 'shap_important_features_icu_dka_dataset.csv'), index=False)
-    # # 5 Save new dataset with top 30 features importance based on SHAP
-    # non_pre_dataset[feat_imp_shap_grouped['feature'].head(30).tolist() + ['in_hospital_death']].to_csv(os.path.join(folder, 'shap_30_important_features_icu_dka_dataset.csv'), index=False)
-
-
-# def analyse_features():
-#     feat_imp_shap_grouped = group_dummy_feature_importance(feature_importance_shap)
-#     filter_features_1 = no_pre_feat_imp_df[no_pre_feat_imp_df["importance"] >= 0.01]
-#     filter_features_2 = feat_imp_shap_grouped[feat_imp_shap_grouped["importance"] >= 0.01]
-#     filter_features_3 = feat_imp_grouped[feat_imp_grouped["importance"] >= 0.01]
-#
-#     # Convert each set of features into a Python set
-#     set1 = set(paper_features)
-#     set2 = set(filter_features_2["feature"].head(30))
-#     set3 = set(filter_features_3["feature"].head(30))
-#
-#     # 1. Features common to all three
-#     common_all = set1 & set2 & set3
-#
-#     # 2. Features common to at least two sets
-#     common_1_2 = set1 & set2
-#     common_1_3 = set1 & set3
-#     common_2_3 = set2 & set3
-#
-#     # 3. Unique features in each
-#     unique_1 = set1 - (set2 | set3)
-#     unique_2 = set2 - (set1 | set3)
-#     unique_3 = set3 - (set1 | set2)
-#
-#     # Print results
-#     print("✅ Common to all three:", common_all)
-#     print("✅ Common to filter_1 & filter_2:", common_1_2)
-#     print("✅ Common to filter_1 & filter_3:", common_1_3)
-#     print("✅ Common to filter_2 & filter_3:", common_2_3)
-#
-#     print("\n🔹 Unique to filter_1:", unique_1)
-#     print("🔹 Unique to filter_2:", unique_2)
-#     print("🔹 Unique to filter_3:", unique_3)
