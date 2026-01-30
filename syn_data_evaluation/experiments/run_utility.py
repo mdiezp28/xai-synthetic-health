@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List
 
 import pandas as pd
+from sklearn.model_selection import StratifiedKFold
 from syn_data_evaluation.data import dataset_mixing, postprocessing
 from syn_data_evaluation.data.preprocessing import DataPreprocessor
 from syn_data_evaluation.evaluation.model_evaluator import ModelEvaluator
@@ -98,9 +99,7 @@ class ExperimentRunner:
         self.visualizer.plot_predicted_probabilities(metrics["y_pred_proba"], y_test, best_threshold, filename)
 
         # Get feature importance
-        feat_imp_df = self.explainer.get_feat_importance(
-            model, data['X_train'].columns
-        )
+        feat_imp_df = self.explainer.get_feat_importance(model, X_train_model.columns)
         feat_imp_grouped = self.explainer.group_dummy_feature_importance(feat_imp_df)
 
         # Save importance to CSV
@@ -125,11 +124,130 @@ class ExperimentRunner:
             print("Skipping LIME (found NaNs).")
 
         return {
+            "model": model,
+            "metrics": metrics,
+            "metrics_thr": metrics_thr,
+            "threshold": best_threshold,
             'feat_imp_df': feat_imp_df,
             'feat_imp_grouped': feat_imp_grouped,
             'shap_imp': shap_imp,
             'shap_imp_grouped': shap_imp_grouped
         }
+
+    def run_stratified_kfold(self, real_data: pd.DataFrame, syn_data: pd.DataFrame =None, syn_percentage: float=0.3, n_splits: int = 5, out_dir: str = "outputs", exp_name: str = "cv_experiment", augmentation: bool = False):
+        """
+        Run stratified k-fold cross-validation on full dataset.
+        
+        All real data is used.
+        
+        Args:
+            data: Full dataset (will be split into k folds)
+            n_splits: Number of folds (default: 5)
+            out_dir: Output directory
+            exp_name: Base name for experiment
+            augmentation: Whether to use data augmentation for hybrid data
+            
+        Returns:
+            Dictionary with aggregated results across folds
+        """
+        ensure_dir(out_dir)
+        
+        # Extract features and target
+        X, y = self.preprocessor.get_raw_xy(real_data)
+        
+        # Initialize stratified k-fold
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, 
+                             random_state=42)
+        
+        # Storage for results
+        cv_metrics = []
+        # cv_feature_importance = []
+        
+        print(f"\n{'='*80}")
+        print(f"Running {n_splits}-Fold Stratified Cross-Validation")
+        print(f"Total samples: {len(X)}")
+        print(f"{'='*80}\n")
+        
+        for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
+            print(f"\n{'='*60}\nFOLD {fold_idx}/{n_splits}\n{'='*60}")
+
+            real_train_fold = real_data.iloc[train_idx].reset_index(drop=True)
+            real_test_fold  = real_data.iloc[test_idx].reset_index(drop=True)
+
+            
+            if syn_data is None:
+                hybrid_train_fold = real_train_fold
+            elif not augmentation:
+                hybrid_train_fold = dataset_mixing.get_hybrid_data_stratified(
+                    real_data=real_train_fold,
+                    syn_data=syn_data,
+                    syn_data_percentage=syn_percentage,
+                    seed=1000+fold_idx,
+                )
+            else:
+                hybrid_train_fold = dataset_mixing.get_hybrid_data_augmentation(
+                    real_data=real_train_fold,
+                    syn_data=syn_data,
+                    syn_data_percentage=syn_percentage,
+                    stratify=True,
+                    seed=1000+fold_idx
+                )
+
+            fold_dir = os.path.join(out_dir, f"fold_{fold_idx}")
+            ensure_dir(fold_dir)
+
+            out = self.run_experiment(
+                train_data=hybrid_train_fold,
+                test_data=real_test_fold,
+                out_dir=fold_dir,
+                exp_name=f"{exp_name}_fold_{fold_idx}",
+            )
+            
+            # Extract metrics for aggregation
+            base_metrics = out["metrics"]["metrics"]          # dict from evaluate_model
+            thr_metrics = out["metrics_thr"]["metrics"]       # dict from evaluate_with_threshold
+
+            fold_row = {
+                "fold": fold_idx,
+                "threshold": out["threshold"],
+                **base_metrics,
+                **thr_metrics,
+            }
+            cv_metrics.append(fold_row)
+
+            print(f"Fold {fold_idx} done. AUC={base_metrics.get('auc', None)}")
+
+        # Aggregate + save
+        metrics_df = pd.DataFrame(cv_metrics)
+        metrics_path = os.path.join(out_dir, f"{exp_name}_all_folds_metrics.csv")
+        metrics_df.to_csv(metrics_path, index=False)
+
+        # Summary stats (mean/std) for numeric columns
+        numeric_cols = [c for c in metrics_df.columns if c not in ["fold"] and metrics_df[c].dtype != "object"]
+        summary = []
+        for c in numeric_cols:
+            summary.append({
+                "metric": c,
+                "mean": float(metrics_df[c].mean()),
+                "std": float(metrics_df[c].std()),
+                "min": float(metrics_df[c].min()),
+                "max": float(metrics_df[c].max()),
+            })
+        summary_df = pd.DataFrame(summary).sort_values("metric")
+        summary_path = os.path.join(out_dir, f"{exp_name}_summary_metrics.csv")
+        summary_df.to_csv(summary_path, index=False)
+
+        print(f"\n{'='*80}")
+        print("CROSS-VALIDATION COMPLETE")
+        print(f"Saved: {metrics_path}")
+        print(f"Saved: {summary_path}")
+        print(f"{'='*80}\n")
+
+        return {
+            "metrics_df": metrics_df,
+            "summary_df": summary_df,
+        }
+    
     
     def _save_evaluation_metrics(self, metrics, metrics_thr, threshold, exp_name, out_dir):
         """ Save metrics to CSV """
@@ -144,6 +262,75 @@ class ExperimentRunner:
                         index=False)
 
 
+
+def run_stratified_experiments(syn_data, real_data, result_path, data_name):
+    """
+    Run complete list of experiments comparing synthetic and real data.
+    
+    Experiments:
+    1. Train on synthetic, test on real
+    2. Train on hybrid (constant size), test on real
+    3. Train on hybrid (augmented), test on real
+    """
+    
+    syn_data = postprocessing.postprocess_for_utility(syn_data)
+
+    # # Configuration
+    # data_config = DataConfig()
+    # exp_config = ExperimentConfig()
+
+    result_path = result_path + data_name + "/"
+    percentages = [0.1, 0.3, 0.5, 0.7]
+
+    runner = ExperimentRunner()
+
+    exp_name = "exp1_" + data_name
+    n_classes = syn_data['in_hospital_death'].nunique(dropna=True)
+    if n_classes > 1:
+        print("\n" + "="*80)
+        print("Experiment 1: \n Training data: Synthetic data.\n Test data: real test data.")
+        print("="*80 + "\n")
+        runner.run_stratified_kfold(
+            real_data=real_data,
+            syn_data=syn_data,
+            syn_percentage=1,
+            n_splits=5,
+            out_dir=result_path+exp_name+"/",
+            exp_name=exp_name,
+        )
+
+    
+    print("\n" + "="*80)
+    print("Experiment 2: \n Training data: Hybrid data.\n Test data: real test data.")
+    print("="*80 + "\n")
+
+    for perc in percentages:
+        exp_name = f"exp2_{data_name}_{int(perc*100)}perc"
+        runner.run_stratified_kfold(
+            real_data=real_data,
+            syn_data=syn_data,
+            syn_percentage=perc,
+            n_splits=5,
+            out_dir=result_path+exp_name+"/",
+            exp_name=exp_name,
+        )
+
+    print("\n" + "="*80)
+    print("Experiment 3: \n Training data: Hybrid data - Augmentation.\n Test data: real test data.")
+    print("="*80 + "\n")
+
+    for perc in percentages:
+        exp_name = f"exp3_{data_name}_{int(perc*100)}perc"
+        runner.run_stratified_kfold(
+            real_data=real_data,
+            syn_data=syn_data,
+            syn_percentage=perc,
+            n_splits=5,
+            out_dir=result_path+exp_name+"/",
+            exp_name=exp_name,
+            augmentation=True
+        )
+        
 
 def run_experiment_list(synthetic_data, train_data, test_data, result_path, data_name):
     """
@@ -166,18 +353,20 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
 
     runner = ExperimentRunner()
 
-    print("\n" + "="*80)
-    print("Experiment 1: \n Training data: Synthetic data.\n Test data: real test data.")
-    print("="*80 + "\n")
-
-    exp_name = "exp1_" + data_name
-    runner.run_experiment(
-        train_data=synthetic_data, 
-        test_data=test_data,
-        out_dir=result_path+exp_name+"/",
-        exp_name=exp_name,
-    )
-    
+    n_classes = synthetic_data['in_hospital_death'].nunique(dropna=True)
+    if n_classes > 1:
+        print("\n" + "="*80)
+        print("Experiment 1: \n Training data: Synthetic data.\n Test data: real test data.")
+        print("="*80 + "\n")
+        
+        exp_name = "exp1_" + data_name
+        runner.run_experiment(
+            train_data=synthetic_data, 
+            test_data=test_data,
+            out_dir=result_path+exp_name+"/",
+            exp_name=exp_name,
+        )
+        
     print("\n" + "="*80)
     print("Experiment 2: \n Training data: Hybrid data.\n Test data: real test data.")
     print("="*80 + "\n")
@@ -215,48 +404,3 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
             out_dir=result_path+exp_name+"/",
             exp_name=exp_name,
         )
-
-def main():
-    dataset_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/"
-    result_path = os.path.join(dataset_path,'utility/')
-
-    train_data = pd.read_csv(os.path.join(dataset_path, 'real_train.csv'))
-    test_data = pd.read_csv(os.path.join(dataset_path, 'real_test.csv'))
-    experiment_list = [
-        ("baseline", '2026_01_21_11_30_26_syn_bs_250_e2500.csv'),
-        # ("shap2", '2026_01_22_03_36_40_syn_shap_2_3.csv'),
-        # ("shap5", '2026_01_22_05_09_09_syn_shap_5_3.csv'),
-        # ("shap10", '2026_01_22_00_31_23_syn_shap_10_2.csv'),
-    ]
-    for data_name, syn_data in experiment_list:
-        syn_dataset = pd.read_csv(os.path.join(dataset_path, syn_data))
-
-        run_experiment_list(
-            synthetic_data=syn_dataset,
-            train_data=train_data,
-            test_data=test_data,
-            result_path=result_path,
-            data_name=data_name,
-        )
-    
-    
-
-
-if __name__ == "__main__":
-    main()
-
-
-
-# Train XGBoost classifier
-#  parameters in the paper:
-#         n_estimators=100,
-#         max_depth=3,
-#         eta=0.1,
-#         gamma=0.25,
-#         colsample_bytree=1,
-#         min_child_weight=1,
-#         subsample=0.5,
-#         scale_pos_weight=10,
-#         # scale_pos_weight=get_scale_pos_weight(y_train),
-#         eval_metric='auc'
-#         threashold = 0.017
