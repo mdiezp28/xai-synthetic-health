@@ -1,10 +1,11 @@
 
 
+import os
 from typing import List, Optional
 from click import Tuple
 import pandas as pd
 from sklearn.discriminant_analysis import StandardScaler
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, train_test_split
 
 from syn_data_evaluation.data.mice_imputation import MICE_Imputer
 
@@ -14,7 +15,6 @@ class DataPreprocessor:
     def __init__(self, target_col: str = "in_hospital_death", dummy_separator: str = "__"):
         self.target_col = target_col
         self.dummy_separator = dummy_separator
-        self.scaler = None
 
     # Clean the data (split the data from the outcome)
     def get_raw_xy(self, dataset):
@@ -40,11 +40,33 @@ class DataPreprocessor:
             stratify=y
         )
     
+    def save_5_fold_splits(self, data, fold_folder) -> int:
+        """Create and save 5 stratified folds from the data."""
+        X, y = self.get_raw_xy(data)
+        # Split train data in 5-folds for cross-validation
+        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
+                
+                train_fold = data.iloc[train_idx].reset_index(drop=True)
+                validation_fold  = data.iloc[test_idx].reset_index(drop=True)
+                # print(f"Train fold distribution:\n{train_fold['in_hospital_death'].value_counts()}")
+                # Save fold data
+                # create fold folder if not exists
+                if not os.path.exists(fold_folder):
+                    os.makedirs(fold_folder)
+                train_fold.to_csv(os.path.join(fold_folder,f'train_fold_{fold_idx}.csv'), index=False)
+                validation_fold.to_csv(os.path.join(fold_folder,f'validation_fold_{fold_idx}.csv'), index=False)
+    
 
     def encode_categorical(self, train: pd.DataFrame, test: pd.DataFrame) -> Tuple:
         """One-hot encode categorical variables."""
         train_encoded = pd.get_dummies(train, prefix_sep=self.dummy_separator)
         test_encoded = pd.get_dummies(test, prefix_sep=self.dummy_separator)
+
+        extra_in_test = set(test_encoded.columns) - set(train_encoded.columns)
+        if extra_in_test:
+            print(f"[encode_categorical] Warning: {len(extra_in_test)} unseen test columns were dropped "
+                f"(categories not present in train).")
 
         # Align test columns with train
         test_encoded = test_encoded.reindex(columns=train_encoded.columns, fill_value=0)
@@ -54,38 +76,26 @@ class DataPreprocessor:
     
     def normalize_data(self, train: pd.DataFrame, test: pd.DataFrame) -> Tuple:
         """Normalize data using StandardScaler."""
-        if self.scaler is None:
-            self.scaler = StandardScaler()
-            train_scaled = self.scaler.fit_transform(train)
-        else:
-            train_scaled = self.scaler.transform(train)
+        
+        scaler = StandardScaler()
+        train_scaled = scaler.fit_transform(train)
+        test_scaled = scaler.transform(test)
         
         train_df = pd.DataFrame(train_scaled, columns=train.columns, index=train.index)
-        
-
-        test_scaled = self.scaler.transform(test)
         test_df = pd.DataFrame(test_scaled, columns=test.columns, index=test.index)
         
         return train_df, test_df
         
     
     def prepare_data(self, train_data: pd.DataFrame, 
-                    test_data: Optional[pd.DataFrame] = None,
+                    test_data: pd.DataFrame,
                     impute=False,
                     categorical_cols=None,
-                    normalize: bool = True,
-                    test_size: float = 0.3,
-                    random_state: int = 42) -> dict:
+                    normalize: bool = True) -> dict:
         """Complete data preparation pipeline."""
-        X, y = self.get_raw_xy(train_data)
+        X_train, y_train = self.get_raw_xy(train_data)
         
-        if test_data is None:
-            X_train, X_test, y_train, y_test = self.split_data(
-                X, y, test_size, random_state
-            )
-        else:
-            X_test, y_test = self.get_raw_xy(test_data)
-            X_train, y_train = X, y
+        X_test, y_test = self.get_raw_xy(test_data)
         
         # Reset indices
         X_train = X_train.reset_index(drop=True)

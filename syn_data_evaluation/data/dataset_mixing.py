@@ -1,117 +1,144 @@
-import pandas as pd
+import os
 import numpy as np
-from sklearn.model_selection import train_test_split
+import pandas as pd
+from pathlib import Path
+from syn_data_evaluation.data.preprocessing import DataPreprocessor
 
 
-def get_hybrid_data_constant_size(real_data, syn_data, syn_data_percentage):
+def get_hybrid_data(
+    train_data: pd.DataFrame,
+    syn_data: pd.DataFrame,
+    syn_pct: float,
+    target_col: str = "in_hospital_death",
+    seed: int = 42,
+    constant_size: bool = True,         
+    match_real: bool = False,  
+    verbose: bool = True,
+):
     """
-    Create hybrid dataset with constant size by replacing real with synthetic.
-    
-    Args:
-        real_data: Real training data
-        syn_data: Synthetic data
-        syn_data_percentage: Percentage of synthetic data (0.0 to 1.0)
-    
-    Returns:
-        Hybrid dataset with same size as real_data
-    
-    Example:
-        - real_data has 1000 samples
-        - syn_data_percentage = 0.3
-        - Result: 700 real + 300 synthetic = 1000 total
+    Create a training set by mixing real training data with sampled synthetic rows.
     """
-    total_size = len(real_data)
-    syn_size = int(total_size * syn_data_percentage)
-    real_size = total_size - syn_size
+    hybrid_size = len(train_data)
+    syn_size = int(hybrid_size * syn_pct)
     
-    print(f"Total size: {total_size}")
-    print(f"Real data size: {real_size} ({(1-syn_data_percentage)*100:.0f}%)")
-    print(f"Synthetic data size: {syn_size} ({syn_data_percentage*100:.0f}%)")
-    
-    # Sample from real data
-    real_data_sampled = real_data.sample(n=real_size, random_state=42)
-    
-    # Sample from synthetic data
-    if syn_size > len(syn_data):
-        print(f"Warning: Not enough synthetic data ({len(syn_data)} available, {syn_size} needed)")
-        print(f"Using all available synthetic data and adjusting real data size")
-        syn_data_sampled = syn_data
-        real_size = total_size - len(syn_data)
-        real_data_sampled = real_data.sample(n=real_size, random_state=42)
-    else:
-        syn_data_sampled = syn_data.sample(n=syn_size, random_state=42)
-    
-    # Combine and shuffle
-    train_data = pd.concat([real_data_sampled, syn_data_sampled], ignore_index=True)
-    train_data = train_data.sample(frac=1, random_state=42).reset_index(drop=True)
-
-    
-    print(f"Final train data size: {len(train_data)}")
-    print(f"Class distribution: {train_data['in_hospital_death'].value_counts().to_dict()}")
-    
-    return train_data
-
-
-# Stratified replacement (better for imbalanced data)
-def get_hybrid_data_stratified(real_data, syn_data, syn_data_percentage, seed=42, target_col='in_hospital_death'):
-    """
-    Create hybrid dataset maintaining class balance.
-    Replaces real data with synthetic while preserving class distribution.
-    """
-    total_size = len(real_data)
-    syn_size = int(total_size * syn_data_percentage)
-    real_size = total_size - syn_size
-    
-    # Get class distribution from real data
-    real_class_dist = real_data[target_col].value_counts(normalize=True)
-    
-    print(f"Total size: {total_size}")
-    print(f"Target class distribution: {real_class_dist.to_dict()}")
-    
-    # Stratified sampling from real data
-    real_data_sampled = real_data.groupby(target_col, group_keys=False).apply(
-        lambda x: x.sample(n=int(len(x) * (real_size / total_size)), random_state=seed)
-    ).reset_index(drop=True)
-    
-    # Stratified sampling from synthetic data
-    syn_data_sampled = syn_data.groupby(target_col, group_keys=False).apply(
-        lambda x: x.sample(n=min(len(x), int(len(real_data[real_data[target_col] == x.name]) * 
-                                              (syn_size / total_size))), 
-                          random_state=seed)
-    ).reset_index(drop=True)
-    
-    # Combine
-    train_data = pd.concat([real_data_sampled, syn_data_sampled], ignore_index=True)
-    
-    print(f"Real data: {len(real_data_sampled)} samples")
-    print(f"  Class distribution: {real_data_sampled[target_col].value_counts().to_dict()}")
-    print(f"Synthetic data: {len(syn_data_sampled)} samples")
-    print(f"  Class distribution: {syn_data_sampled[target_col].value_counts().to_dict()}")
-    print(f"Final train data: {len(train_data)} samples")
-    print(f"  Class distribution: {train_data[target_col].value_counts().to_dict()}")
-    
-    return train_data
-
-
-def get_hybrid_data_augmentation(real_data, syn_data, syn_data_percentage, stratify=False, seed=42, target_col='in_hospital_death'):
-    # Hybrid approach: train on real + synthetic data with given synthetic data percentage
-    syn_size = int(len(real_data) * syn_data_percentage)
-    print(f"Synthetic data size for {syn_data_percentage*100}%: {syn_size}")
     if syn_size > len(syn_data):
         syn_size = len(syn_data)
         print(f"Adjusted synthetic data size to available data: {syn_size}")
-
-    n_classes = syn_data[target_col].nunique(dropna=True)
-    if stratify and n_classes > 1:
-        print("Using stratified sampling for synthetic data.")
-        syn_data_sampled, _ = train_test_split(
-            syn_data,
-            train_size=syn_size,
-            stratify=syn_data[target_col],
-            random_state=seed
-        )
+    if syn_size == 0:
+        return train_data.copy()
+        
+        
+    if constant_size:
+        real_size = hybrid_size - syn_size
     else:
-        syn_data_sampled = syn_data.sample(n=syn_size, random_state=seed)
-    print(f"Synthetic data: {syn_data_sampled[target_col].value_counts()}")
-    train_data = pd.concat([real_data, syn_data_sampled], ignore_index=True)
-    return train_data
+        real_size = hybrid_size
+        hybrid_size = hybrid_size + syn_size
+        sampled_real = train_data.copy()
+    
+    print(f"Total size: {hybrid_size}")
+    print(f"Synthetic data size: {syn_size} ({syn_pct*100:.0f}%)")
+
+    # Decide how many pos/neg to sample from synthetic
+    n_classes = syn_data[target_col].nunique(dropna=True)
+    if match_real and n_classes > 1:
+        syn_pos = syn_data[syn_data[target_col] == 1]
+        syn_neg = syn_data[syn_data[target_col] == 0]
+
+        # Match the REAL fold prevalence
+        real_pos_rate = (train_data[target_col] == 1).mean()
+        pos_n = int(round(syn_size * real_pos_rate))
+        neg_n = syn_size - pos_n
+
+        pos_part = syn_pos.sample(n=min(pos_n, len(syn_pos)), random_state=seed)
+        neg_part = syn_neg.sample(n=min(neg_n, len(syn_neg)), random_state=seed)
+        sampled_syn = pd.concat([pos_part, neg_part], ignore_index=True)
+
+        if constant_size:
+            # Adjust real training set to match sampled synthetic prevalence
+            real_pos = train_data[train_data[target_col] == 1]
+            real_neg = train_data[train_data[target_col] == 0]
+            real_pos_n = int(round(real_size * real_pos_rate))
+            real_neg_n = real_size - real_pos_n
+            sampled_real = pd.concat([
+                real_pos.sample(n=real_pos_n, random_state=seed),
+                real_neg.sample(n=real_neg_n, random_state=seed)
+            ], ignore_index=True)
+
+    else:
+        sampled_syn = syn_data.sample(n=syn_size, random_state=seed)
+        if constant_size:
+            sampled_real = train_data.sample(n=real_size, random_state=seed)
+
+    # If we couldn't reach syn_size because of limited syn_pos/syn_neg, -> error
+    if len(sampled_syn) < syn_size:
+        raise ValueError(
+            f"Not enough synthetic samples to match real prevalence. "
+            f"Generate a larger synthetic dataset for this fold/method."
+        )
+    # Combine
+    hybrid_data = pd.concat([sampled_real, sampled_syn], ignore_index=True)
+    hybrid_data = hybrid_data.sample(frac=1, random_state=seed).reset_index(drop=True)
+
+    if len(hybrid_data) != hybrid_size:
+        raise ValueError(
+            f"Hybrid data size mismatch: expected {hybrid_size}, got {len(hybrid_data)}"
+        )
+
+    if verbose:
+        def vc(df): return df[target_col].value_counts(dropna=False).to_dict()
+        print(f"[datamixer] seed={seed}")
+        print(f"  real initial size: {len(train_data)}")
+        print(f"  real counts: {vc(sampled_real)}")
+        print(f"  syn sampled counts: {vc(sampled_syn)}")
+        print(f"  final train counts: {vc(hybrid_data)}")
+
+    return hybrid_data
+
+def get_csv_data(data_dir, pattern = "*_syn_data_10f.csv"):
+    files = sorted(Path(data_dir).glob(pattern))
+
+    print(f"Found {len(files)} files")
+
+    runs = []
+    for f in files:
+        df = pd.read_csv(f)
+        df["source_file"] = f.name 
+        runs.append(df)
+    
+
+    return runs
+
+def build_dataset_from_folds(fold_path, target_col="in_hospital_death"):
+    X_parts = []
+    y_parts = []
+    test_fold = []
+    for i in range(5):
+        train_fold = pd.read_csv(os.path.join(fold_path, f"train_fold_{i+1}.csv"))
+        validation_fold = pd.read_csv(os.path.join(fold_path, f"validation_fold_{i+1}.csv"))
+
+        preprocessing = DataPreprocessor(target_col=target_col)
+        data = preprocessing.prepare_data(
+            train_data=train_fold, 
+            test_data=validation_fold,
+            impute=False,
+            categorical_cols=["gender", "insurance", "race"],
+            normalize=False
+        )
+        X_train = data['X_train_model'].values
+        X_validation = data['X_test_model'].values
+        y_train = data['y_train'].values
+        y_validation = data['y_test'].values
+        
+
+        X_parts.extend([X_train, X_validation])
+        y_parts.extend([y_train, y_validation])
+
+        # -1 => always train
+        test_fold.extend([-1] * len(train_fold))
+        # i => validation fold id
+        test_fold.extend([i] * len(validation_fold))
+
+    X_data = np.vstack(X_parts)
+    y_data = np.concatenate(y_parts)
+    test_fold = np.array(test_fold, dtype=int)
+    return X_data, y_data, test_fold
