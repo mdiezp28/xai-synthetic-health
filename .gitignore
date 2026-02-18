@@ -6,3 +6,10 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+__pycache__/
+
+# Only .ipynb files in notebooks
+*.tex
+notebooks/*.csv
+notebooks/*.xlsx
+notebooks/*.json
