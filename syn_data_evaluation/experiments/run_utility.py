@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List
 
 import pandas as pd
-from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_curve
 from syn_data_evaluation.data import dataset_mixing, postprocessing
 from syn_data_evaluation.data.preprocessing import DataPreprocessor
 from syn_data_evaluation.evaluation.model_evaluator import ModelEvaluator
@@ -43,7 +43,7 @@ class ExperimentRunner:
         self.visualizer = ModelVisualizer()
         self.explainer = ModelExplainer()
 
-    def run_experiment(self, train_data, test_data=None, out_dir="outputs", exp_name="experiment"):
+    def run_experiment(self, train_data, test_data, out_dir="outputs", exp_name="experiment", threshold=None):
         ensure_dir(out_dir)
         filename = os.path.join(out_dir, exp_name)
 
@@ -54,7 +54,6 @@ class ExperimentRunner:
             impute=self.exp_config.impute,
             categorical_cols=self.data_config.categorical_cols,
             normalize=self.exp_config.normalize,
-            test_size=self.data_config.test_size,
             )
         X_train_model = data['X_train_model']
         X_test_model = data['X_test_model']
@@ -73,17 +72,24 @@ class ExperimentRunner:
         
         # Evaluate
         metrics = self.evaluator.evaluate_model(self.model_wrapper, X_test_model.values, y_test)
-        # Find optimal threshold
-        optimal_metrics = self.evaluator.get_optimal_threshold(y_test, metrics["y_pred_proba"])
-        best_threshold = optimal_metrics["threshold"]
-        print(f"Optimal Threshold: {best_threshold:.3f}") 
+
+        # ROC curve
+        fpr, tpr, thresholds = roc_curve(y_test, metrics["y_pred_proba"])
+        if threshold is not None:
+            best_threshold = threshold
+            idx = self.evaluator.find_threshold_idx(thresholds, best_threshold)
+            print(f"Using provided threshold: {best_threshold:.3f}")
+        else:
+            # Find optimal threshold
+            idx, best_threshold = self.evaluator.get_optimal_threshold(fpr, tpr, thresholds)
+            print(f"Optimal Threshold: {best_threshold:.3f}") 
 
         # Plot the ROC curve
         self.visualizer.plot_roc_curve(
-            optimal_metrics["metrics"]["fpr"],
-            optimal_metrics["metrics"]["tpr"],
-            optimal_metrics["metrics"]["thresholds"], 
-            optimal_metrics["metrics"]["idx"], 
+            fpr,
+            tpr, 
+            thresholds, 
+            idx, 
             metrics["metrics"]["auc"], 
             filename
         )
@@ -134,93 +140,28 @@ class ExperimentRunner:
             'shap_imp_grouped': shap_imp_grouped
         }
 
-    def run_stratified_kfold(self, real_data: pd.DataFrame, syn_data: pd.DataFrame =None, syn_percentage: float=0.3, n_splits: int = 5, out_dir: str = "outputs", exp_name: str = "cv_experiment", augmentation: bool = False):
-        """
-        Run stratified k-fold cross-validation on full dataset.
-        
-        All real data is used.
-        
-        Args:
-            data: Full dataset (will be split into k folds)
-            n_splits: Number of folds (default: 5)
-            out_dir: Output directory
-            exp_name: Base name for experiment
-            augmentation: Whether to use data augmentation for hybrid data
-            
-        Returns:
-            Dictionary with aggregated results across folds
-        """
-        ensure_dir(out_dir)
-        
-        # Extract features and target
-        X, y = self.preprocessor.get_raw_xy(real_data)
-        
-        # Initialize stratified k-fold
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, 
-                             random_state=42)
-        
-        # Storage for results
+    def save_folds_metrics(self, experiment_results, out_dir: str = "outputs", exp_name: str = "cv_experiment"):
         cv_metrics = []
-        # cv_feature_importance = []
-        
-        print(f"\n{'='*80}")
-        print(f"Running {n_splits}-Fold Stratified Cross-Validation")
-        print(f"Total samples: {len(X)}")
-        print(f"{'='*80}\n")
-        
-        for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
-            print(f"\n{'='*60}\nFOLD {fold_idx}/{n_splits}\n{'='*60}")
-
-            real_train_fold = real_data.iloc[train_idx].reset_index(drop=True)
-            real_test_fold  = real_data.iloc[test_idx].reset_index(drop=True)
-
-            
-            if syn_data is None:
-                hybrid_train_fold = real_train_fold
-            elif not augmentation:
-                hybrid_train_fold = dataset_mixing.get_hybrid_data_stratified(
-                    real_data=real_train_fold,
-                    syn_data=syn_data,
-                    syn_data_percentage=syn_percentage,
-                    seed=1000+fold_idx,
-                )
-            else:
-                hybrid_train_fold = dataset_mixing.get_hybrid_data_augmentation(
-                    real_data=real_train_fold,
-                    syn_data=syn_data,
-                    syn_data_percentage=syn_percentage,
-                    stratify=True,
-                    seed=1000+fold_idx
-                )
-
-            fold_dir = os.path.join(out_dir, f"fold_{fold_idx}")
-            ensure_dir(fold_dir)
-
-            out = self.run_experiment(
-                train_data=hybrid_train_fold,
-                test_data=real_test_fold,
-                out_dir=fold_dir,
-                exp_name=f"{exp_name}_fold_{fold_idx}",
-            )
-            
+        for fold_idx, experiment_result in enumerate(experiment_results, 1):
             # Extract metrics for aggregation
-            base_metrics = out["metrics"]["metrics"]          # dict from evaluate_model
-            thr_metrics = out["metrics_thr"]["metrics"]       # dict from evaluate_with_threshold
+            base_metrics = experiment_result["metrics"]["metrics"]          # dict from evaluate_model
+            thr_metrics = experiment_result["metrics_thr"]["metrics"]       # dict from evaluate_with_threshold
 
             fold_row = {
                 "fold": fold_idx,
-                "threshold": out["threshold"],
+                "threshold": experiment_result["threshold"],
                 **base_metrics,
                 **thr_metrics,
             }
+            # Storage for results
             cv_metrics.append(fold_row)
 
             print(f"Fold {fold_idx} done. AUC={base_metrics.get('auc', None)}")
 
         # Aggregate + save
         metrics_df = pd.DataFrame(cv_metrics)
-        metrics_path = os.path.join(out_dir, f"{exp_name}_all_folds_metrics.csv")
-        metrics_df.to_csv(metrics_path, index=False)
+        # metrics_path = os.path.join(out_dir, f"{exp_name}_all_folds_metrics.csv")
+        # metrics_df.to_csv(metrics_path, index=False)
 
         # Summary stats (mean/std) for numeric columns
         numeric_cols = [c for c in metrics_df.columns if c not in ["fold"] and metrics_df[c].dtype != "object"]
@@ -239,7 +180,6 @@ class ExperimentRunner:
 
         print(f"\n{'='*80}")
         print("CROSS-VALIDATION COMPLETE")
-        print(f"Saved: {metrics_path}")
         print(f"Saved: {summary_path}")
         print(f"{'='*80}\n")
 
@@ -262,84 +202,16 @@ class ExperimentRunner:
                         index=False)
 
 
-
-def run_stratified_experiments(syn_data, real_data, result_path, data_name):
+def run_experiment_list(synthetic_data, train_data, test_data, result_path, data_name, threshold=None):
     """
     Run complete list of experiments comparing synthetic and real data.
     
     Experiments:
     1. Train on synthetic, test on real
-    2. Train on hybrid (constant size), test on real
-    3. Train on hybrid (augmented), test on real
-    """
-    
-    syn_data = postprocessing.postprocess_for_utility(syn_data)
-
-    # # Configuration
-    # data_config = DataConfig()
-    # exp_config = ExperimentConfig()
-
-    result_path = result_path + data_name + "/"
-    percentages = [0.1, 0.3, 0.5, 0.7]
-
-    runner = ExperimentRunner()
-
-    exp_name = "exp1_" + data_name
-    n_classes = syn_data['in_hospital_death'].nunique(dropna=True)
-    if n_classes > 1:
-        print("\n" + "="*80)
-        print("Experiment 1: \n Training data: Synthetic data.\n Test data: real test data.")
-        print("="*80 + "\n")
-        runner.run_stratified_kfold(
-            real_data=real_data,
-            syn_data=syn_data,
-            syn_percentage=1,
-            n_splits=5,
-            out_dir=result_path+exp_name+"/",
-            exp_name=exp_name,
-        )
-
-    
-    print("\n" + "="*80)
-    print("Experiment 2: \n Training data: Hybrid data.\n Test data: real test data.")
-    print("="*80 + "\n")
-
-    for perc in percentages:
-        exp_name = f"exp2_{data_name}_{int(perc*100)}perc"
-        runner.run_stratified_kfold(
-            real_data=real_data,
-            syn_data=syn_data,
-            syn_percentage=perc,
-            n_splits=5,
-            out_dir=result_path+exp_name+"/",
-            exp_name=exp_name,
-        )
-
-    print("\n" + "="*80)
-    print("Experiment 3: \n Training data: Hybrid data - Augmentation.\n Test data: real test data.")
-    print("="*80 + "\n")
-
-    for perc in percentages:
-        exp_name = f"exp3_{data_name}_{int(perc*100)}perc"
-        runner.run_stratified_kfold(
-            real_data=real_data,
-            syn_data=syn_data,
-            syn_percentage=perc,
-            n_splits=5,
-            out_dir=result_path+exp_name+"/",
-            exp_name=exp_name,
-            augmentation=True
-        )
-        
-
-def run_experiment_list(synthetic_data, train_data, test_data, result_path, data_name):
-    """
-    Run complete list of experiments comparing synthetic and real data.
-    
-    Experiments:
-    1. Train on synthetic, test on real
-    2. Train on hybrid (constant size), test on real
-    3. Train on hybrid (augmented), test on real
+    2. Train on hybrid (constant size, syn data with same proportion as real), test on real
+    3. Train on hybrid (augmented, syn data with same proportion as real), test on real
+    4. Train on hybrid (constant size, random syn data), test on real
+    5. Train on hybrid (augmented, random syn data), test on real
     """
     
     synthetic_data = postprocessing.postprocess_for_utility(synthetic_data)
@@ -358,49 +230,284 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
         print("\n" + "="*80)
         print("Experiment 1: \n Training data: Synthetic data.\n Test data: real test data.")
         print("="*80 + "\n")
-        
+
         exp_name = "exp1_" + data_name
         runner.run_experiment(
             train_data=synthetic_data, 
             test_data=test_data,
             out_dir=result_path+exp_name+"/",
             exp_name=exp_name,
+            threshold=threshold
         )
         
+        print("\n" + "="*80)
+        print("Experiment 2: \n Training data: Hybrid data.\n Test data: real test data.")
+        print("="*80 + "\n")
+
+        for perc in percentages:
+            exp_name = f"exp2_{data_name}_{int(perc*100)}perc"
+
+            hybrid_data = dataset_mixing.get_hybrid_data(
+                train_data=train_data,
+                syn_data=synthetic_data,
+                syn_pct=perc,
+                constant_size=True,
+                match_real=True
+            )
+            runner.run_experiment(
+                train_data=hybrid_data, 
+                test_data=test_data,
+                out_dir=result_path+exp_name+"/",
+                exp_name=exp_name,
+                threshold=threshold
+            )
+
+        print("\n" + "="*80)
+        print("Experiment 3: \n Training data: Hybrid data - Augmentation.\n Test data: real test data.")
+        print("="*80 + "\n")
+
+        for perc in percentages:
+            exp_name = f"exp3_{data_name}_{int(perc*100)}perc"
+
+            hybrid_data = dataset_mixing.get_hybrid_data(
+                train_data=train_data,
+                syn_data=synthetic_data,
+                syn_pct=perc,
+                constant_size=False,
+                match_real=True
+            )
+            runner.run_experiment(
+                train_data=hybrid_data, 
+                test_data=test_data,
+                out_dir=result_path+exp_name+"/",
+                exp_name=exp_name,
+                threshold=threshold
+            )
+
+
     print("\n" + "="*80)
-    print("Experiment 2: \n Training data: Hybrid data.\n Test data: real test data.")
+    print("Experiment 4: \n Training data: Hybrid data. Random selection.\n Test data: real test data.")
     print("="*80 + "\n")
 
     for perc in percentages:
-        exp_name = f"exp2_{data_name}_{int(perc*100)}perc"
+        exp_name = f"exp4_{data_name}_{int(perc*100)}perc"
 
-        hybrid_data = dataset_mixing.get_hybrid_data_constant_size(
-            real_data=train_data,
+        hybrid_data = dataset_mixing.get_hybrid_data(
+            train_data=train_data,
             syn_data=synthetic_data,
-            syn_data_percentage=perc
+            syn_pct=perc,
+            constant_size=True,
+            match_real=False
         )
         runner.run_experiment(
             train_data=hybrid_data, 
             test_data=test_data,
             out_dir=result_path+exp_name+"/",
             exp_name=exp_name,
+            threshold=threshold
         )
 
     print("\n" + "="*80)
-    print("Experiment 3: \n Training data: Hybrid data - Augmentation.\n Test data: real test data.")
+    print("Experiment 5: \n Training data: Hybrid data - Augmentation. Random selection.\n Test data: real test data.")
     print("="*80 + "\n")
 
     for perc in percentages:
-        exp_name = f"exp3_{data_name}_{int(perc*100)}perc"
+        exp_name = f"exp5_{data_name}_{int(perc*100)}perc"
 
-        hybrid_data = dataset_mixing.get_hybrid_data_augmentation(
-            real_data=train_data,
+        hybrid_data = dataset_mixing.get_hybrid_data(
+            train_data=train_data,
             syn_data=synthetic_data,
-            syn_data_percentage=perc
+            syn_pct=perc,
+            constant_size=False,
+            match_real=False
         )
         runner.run_experiment(
             train_data=hybrid_data, 
             test_data=test_data,
             out_dir=result_path+exp_name+"/",
             exp_name=exp_name,
+            threshold=threshold
         )
+
+def main():
+    dataset_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/"
+    result_path = os.path.join(dataset_path,'_utility/')
+
+    # train_data = pd.read_csv(os.path.join(dataset_path, 'real_train.csv'))
+    # test_data = pd.read_csv(os.path.join(dataset_path, 'real_test.csv'))
+    # real_data = pd.read_csv('./dp_cgans/resources/icu_dka_dataset_simplify.csv').drop("subject_id", axis=1).drop("sofa", axis=1)
+    # experiment_list = [
+    #     # ("baseline", '2026_01_21_11_30_26_syn_bs_250_e2500.csv'),
+    #     ("shap2", '2026_01_22_03_36_40_syn_shap_2_3.csv'),
+    #     # ("shap5", '2026_01_22_05_09_09_syn_shap_5_3.csv'),
+    #     # ("shap10", '2026_01_22_00_31_23_syn_shap_10_2.csv'),
+    #     ("positive_baseline", 'syn_data_baseline_positives.csv'),
+    #     ("positive_shap2", 'syn_data_shap_2_positives.csv'),
+    # ]
+
+    
+    # for data_name, syn_data in experiment_list:
+    #     syn_dataset = pd.read_csv(os.path.join(dataset_path, syn_data))
+    #     run_experiment_list(
+    #         synthetic_data=syn_dataset,
+    #         train_data=train_data,
+    #         test_data=test_data,
+    #         result_path=result_path,
+    #         data_name=data_name,
+    #     )
+    #     run_stratified_experiments(
+    #         syn_data=syn_dataset,
+    #         real_data=real_data,
+    #         result_path=result_path,
+    #         data_name=data_name,
+    #     )
+
+    runner = ExperimentRunner()
+    
+    print("\n" + "="*80)
+    print("Real data")
+    print("="*80 + "\n")
+    data_name = "full_dataset"
+    real_data = pd.read_csv('./dp_cgans/resources/icu_dka_dataset_simplify.csv').drop("subject_id", axis=1)
+    runner.run_stratified_kfold(
+        real_data=real_data,
+        syn_data=None,
+        syn_percentage=0,
+        n_splits=5,
+        out_dir=result_path + data_name + "/",
+        exp_name=data_name,
+    )
+    runner.run_experiment(
+                train_data=real_data, 
+                test_data=None,
+                out_dir=result_path+data_name+"/",
+                exp_name=data_name,
+            )
+
+    # print("\n" + "="*80)
+    # print("Real data no sofa")
+    # print("="*80 + "\n")
+    # data_name = "full_dataset_no_sofa"
+    # real_data = real_data.drop("sofa", axis=1)
+    # runner = ExperimentRunner()
+    # runner.run_stratified_kfold(
+    #     real_data=real_data,
+    #     syn_data=None,
+    #     syn_percentage=0,
+    #     n_splits=5,
+    #     out_dir=result_path + data_name + "/",
+    #     exp_name=data_name,
+    # )
+    # runner.run_experiment(
+    #             train_data=real_data, 
+    #             test_data=None,
+    #             out_dir=result_path+data_name+"/",
+    #             exp_name=data_name,
+    # )
+
+def run_folds(epochs=4000, exp_type="real"):
+    th = [0.14829367, 0.05401431, 0.17826173, 0.25452912, 0.1255561]
+    # Real data folds
+    real_fold_path = "C:/Users/maria/OneDrive - Maastricht University/Maria Diez Perez/datasets/folds/"
+    # Syn data folds
+    syn_fold_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/syn_data/folds/"
+    result_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/utility/"
+
+    
+
+    real_pattern = f"train_fold_*.csv"
+    shap2_pattern = f"{epochs}_shap2_fold_*.csv"
+    shap5_pattern = f"{epochs}_shap5_fold_*.csv"
+    baseline_pattern = f"{epochs}_baseline_fold_*.csv"
+
+    if exp_type == "real":
+        exp_name = "real_fold"
+        fold_path = real_fold_path
+        pattern = real_pattern
+    elif exp_type == "shap2":
+        exp_name = f"{epochs}_shap2_fold"
+        fold_path = syn_fold_path
+        pattern = shap2_pattern
+    elif exp_type == "shap5":
+        exp_name = f"{epochs}_shap5_fold"
+        fold_path = syn_fold_path
+        pattern = shap5_pattern
+    elif exp_type == "baseline":
+        exp_name = f"{epochs}_baseline_fold"
+        fold_path = syn_fold_path
+        pattern = baseline_pattern
+
+    runner = ExperimentRunner()
+    results = []
+    for i in range(5):
+        csv_file = os.path.join(fold_path, pattern.replace("*", f"{i+1}"))
+        print("\n" + "="*80)
+        print(f"Start {csv_file}")
+        print("="*80 + "\n")
+        train_data = pd.read_csv(csv_file)
+        test_data = pd.read_csv(os.path.join(real_fold_path, f"validation_fold_{i+1}.csv"))
+        data_name = f"{exp_name}_{i+1}"
+        results.append(runner.run_experiment(
+                train_data=train_data, 
+                test_data=test_data,
+                out_dir=result_path+data_name+"/",
+                exp_name=data_name,
+                threshold=th[i]
+        ))
+        print(f"Finished {csv_file}")
+
+    runner.save_folds_metrics(results, out_dir=result_path, exp_name="real_data_folds")
+
+def run_real_train():
+    data_path = "C:/Users/maria/OneDrive - Maastricht University/Maria Diez Perez/datasets/"
+    result_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/utility/"
+    threshold = 0.152130991220474
+    runner = ExperimentRunner()
+
+    train_data = pd.read_csv(os.path.join(data_path, "icu_dka_train_data.csv"))
+    test_data = pd.read_csv(os.path.join(data_path, "icu_dka_test_data.csv"))
+    data_name = f"real_train_test"
+    runner.run_experiment(
+            train_data=train_data, 
+            test_data=test_data,
+            out_dir=result_path+data_name+"/",
+            exp_name=data_name,
+            threshold=threshold
+    )
+
+   
+def run_hyperparameters_tuning():
+    fold_path = "C:/Users/maria/OneDrive - Maastricht University/Maria Diez Perez/datasets/folds/"
+    X_data, y_data, test_fold = dataset_mixing.build_dataset_from_folds(fold_path=fold_path)
+
+    
+
+    model_wrapper = XGBoostModel()
+    best_params, best_score, grid = model_wrapper.find_best_params(X_data, y_data, test_fold)
+
+if __name__ == "__main__":
+    # main()
+    # run_hyperparameters_tuning()
+    run_folds(epochs=3500, exp_type="shap2")
+    run_folds(epochs=3500, exp_type="shap5")
+    run_folds(epochs=4000, exp_type="shap2")
+    run_folds(epochs=4000, exp_type="shap5")
+    run_folds(epochs=3500, exp_type="baseline")
+    run_folds(epochs=4000, exp_type="baseline")
+    # run_real_train()
+
+
+
+# Train XGBoost classifier
+#  parameters in the paper:
+#         n_estimators=100,
+#         max_depth=3,
+#         eta=0.1,
+#         gamma=0.25,
+#         colsample_bytree=1,
+#         min_child_weight=1,
+#         subsample=0.5,
+#         scale_pos_weight=10,
+#         # scale_pos_weight=get_scale_pos_weight(y_train),
+#         eval_metric='auc'
+#         threashold = 0.017
