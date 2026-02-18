@@ -47,23 +47,18 @@ class ModelEvaluator:
         }
 
     @staticmethod
-    def get_optimal_threshold(y_test, y_pred_proba):
+    def get_optimal_threshold(fpr, tpr, thresholds):
         # https://towardsdatascience.com/optimal-threshold-for-imbalanced-classification-5884e870c293/
-        fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba)
-
         youdensj = tpr - fpr
         idx = np.argmax(youdensj)
         best_threshold = thresholds[idx]
 
-        return {
-            "threshold": best_threshold,
-            "metrics": {
-                "fpr": fpr,
-                "tpr": tpr,
-                "thresholds": thresholds,
-                "idx": idx,
-            }
-        }
+        return idx, best_threshold
+    
+    @staticmethod
+    def find_threshold_idx(roc_thresholds, fixed_threshold):
+        # roc thresholds are sorted from high to low; closest match is fine for plotting
+        return int(np.argmin(np.abs(roc_thresholds - fixed_threshold)))
 
     @staticmethod
     def evaluate_with_threshold(y_pred_proba, y_test, threshold):
