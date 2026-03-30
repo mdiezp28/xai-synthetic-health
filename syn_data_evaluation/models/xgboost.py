@@ -16,19 +16,32 @@ class XGBoostModel:
     def find_best_params(self, x_train, y_train, test_fold):
         scale_pos_weight = self.get_scale_pos_weight(y_train[test_fold == -1])
         param_grid = {
-            'n_estimators': [100, 150],
-            'max_depth': [3, 4],
-            'gamma': [0, 0.25],
-            'colsample_bytree': [ 0.7],
-            'subsample': [0.5],
-            'reg_alpha': [0.1, 0.3],
-            'reg_lambda': [1.0, 2.0],
-            'max_delta_step': [0],
+            "max_depth": [2],
+            "min_child_weight": [1],
+            "subsample": [0.6, 0.5],
+            "colsample_bytree": [0.6],
+            "gamma": [0],
+            "learning_rate": [0.01, 0.05],
+            "n_estimators": [1000],
+            "reg_alpha": [0.0, 0.1],
+            "reg_lambda": [0.5, 1.0],
+            "max_delta_step": [0],  # optional
         }
+
+        # param_grid = {
+        #     'n_estimators': [100, 150],
+        #     'max_depth': [3, 4],
+        #     'gamma': [0, 0.25],
+        #     'colsample_bytree': [ 0.7],
+        #     'subsample': [0.5],
+        #     'reg_alpha': [0.1, 0.3],
+        #     'reg_lambda': [1.0, 2.0],
+        #     'max_delta_step': [0],
+        # }
+        # Best params: {'colsample_bytree': 0.7, 'gamma': 0, 'max_delta_step': 0, 'max_depth': 3, 'n_estimators': 100, 'reg_alpha': 0.1, 'reg_lambda': 1.0, 'subsample': 0.5}
+        # Best mean CV score: 1.0
         grid = GridSearchCV(
             estimator= xgb.XGBClassifier(
-                learning_rate=0.05,
-                min_child_weight=1,
                 eval_metric='aucpr',
                 scale_pos_weight=scale_pos_weight,
                 # random_state=42,
@@ -55,18 +68,18 @@ class XGBoostModel:
 
     def train(self, x_train, y_train):
         self.model = xgb.XGBClassifier(
-            n_estimators=100,
-            max_depth=3, # paper 3 [3, 4]
-            learning_rate=0.05,
+            n_estimators=1000,
+            max_depth=2, # paper 3 [3, 4]
+            learning_rate=0.01,
             gamma=0, # paper 0.25 [0, 0.1]
-            colsample_bytree=0.7,
+            colsample_bytree=0.6,
             min_child_weight=1,
-            subsample=0.5, # paper 0.5 [0.6, 0.8]
+            subsample=0.6, # paper 0.5 [0.6, 0.8]
             scale_pos_weight=self.get_scale_pos_weight(y_train),
             eval_metric='aucpr',
             max_delta_step=0,
-            reg_alpha=0.1,
-            reg_lambda=1.0,
+            reg_alpha=0.0,
+            reg_lambda=0.5,
             # colsample_bytree=0.7,  # Only use 50% of features per tree
             # colsample_bylevel=0.8,  # Additional sampling at each level
         )

@@ -114,7 +114,10 @@ def build_dataset_from_folds(fold_path, target_col="in_hospital_death"):
     test_fold = []
     for i in range(5):
         train_fold = pd.read_csv(os.path.join(fold_path, f"train_fold_{i+1}.csv"))
-        validation_fold = pd.read_csv(os.path.join(fold_path, f"validation_fold_{i+1}.csv"))
+        validation_fold = pd.read_csv(os.path.join(fold_path, f"val_fold_{i+1}.csv"))
+        columns_to_drop = ["sofa", "subject_id"]
+        train_fold = train_fold.drop(columns=columns_to_drop, errors="ignore")
+        validation_fold = validation_fold.drop(columns=columns_to_drop, errors="ignore")
 
         preprocessing = DataPreprocessor(target_col=target_col)
         data = preprocessing.prepare_data(
@@ -134,9 +137,9 @@ def build_dataset_from_folds(fold_path, target_col="in_hospital_death"):
         y_parts.extend([y_train, y_validation])
 
         # -1 => always train
-        test_fold.extend([-1] * len(train_fold))
+        test_fold.extend([-1] * len(X_train))
         # i => validation fold id
-        test_fold.extend([i] * len(validation_fold))
+        test_fold.extend([i] * len(X_validation))
 
     X_data = np.vstack(X_parts)
     y_data = np.concatenate(y_parts)

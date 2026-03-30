@@ -35,13 +35,13 @@ class ModelEvaluator:
             "y_pred": y_pred,
             "y_pred_proba": y_pred_proba,
             "metrics": dict(
+                auc=auc,
+                auprc=auprc,
                 accuracy=accuracy, 
+                f1=f1,
+                precision=precision,
                 sensitivity=sensitivity, 
                 specificity=specificity, 
-                precision=precision, 
-                f1=f1,
-                auc=auc,
-                auprc=auprc, 
                 confusion_matrix= f"tn:{tn} fp:{fp} fn:{fn} tp:{tp}"
             ),
         }
@@ -84,10 +84,10 @@ class ModelEvaluator:
         return {
             "metrics": dict(
                 accuracy_adj=accuracy,
-                sensitivity_adj=sensitivity,
-                specificity_adj=specificity,
-                precision_adj=precision,
                 f1_adj=f1,
+                precision_adj=precision,
+                sensitivity_adj=sensitivity,
+                specificity_adj=specificity,               
                 confusion_matrix_adj= f"tn:{tn_adj} fp:{fp_adj} fn:{fn_adj} tp:{tp_adj}"
             ),
         }

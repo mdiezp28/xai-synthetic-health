@@ -55,7 +55,7 @@ class DataPreprocessor:
                 if not os.path.exists(fold_folder):
                     os.makedirs(fold_folder)
                 train_fold.to_csv(os.path.join(fold_folder,f'train_fold_{fold_idx}.csv'), index=False)
-                validation_fold.to_csv(os.path.join(fold_folder,f'validation_fold_{fold_idx}.csv'), index=False)
+                validation_fold.to_csv(os.path.join(fold_folder,f'val_fold_{fold_idx}.csv'), index=False)
     
 
     def encode_categorical(self, train: pd.DataFrame, test: pd.DataFrame) -> Tuple:

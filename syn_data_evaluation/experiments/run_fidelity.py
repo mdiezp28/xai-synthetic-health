@@ -42,9 +42,9 @@ def run_experiment():
     syn_path = os.path.join(results_path, "syn_data")
 
     # # Fidelity evaluation on full training set
-    real_data = pd.read_csv(os.path.join(dataset_path, 'icu_dka_train_data.csv'))
+    real_data = pd.read_csv(os.path.join(dataset_path, 'icu_dka_train_data.csv')).drop(columns=["sofa", "subject_id"], errors="ignore")
     # print("Real data shape:", real_data.shape)
-    metadata = get_submetadata(SingleTableMetadata.load_from_json("c:/Users/maria/Code/master/xai-synthetic-health/notebooks/icu_dka_metadata.json").to_dict(), real_data.columns)
+    metadata = get_submetadata(SingleTableMetadata.load_from_json("c:/Users/Maria/Code/xai-synthetic-health/notebooks/icu_dka_metadata.json").to_dict(), real_data.columns)
     # syn_data_baseline = pd.read_csv(os.path.join(syn_path, '2026_02_03_11_14_40_baseline.csv'))
     
     # syn_data_baseline = postprocessing.postprocess_for_fidelity(syn_data_baseline)
@@ -70,15 +70,16 @@ def run_experiment():
     # evaluator = FidelityEvaluator(real_data, syn_data_baseline, metadata)
     # Fidelity on folds
 
-    baseline_list = get_csv_data(syn_path, pattern="2026_02_15_*_fold_*.csv")
+    baseline_list = get_csv_data(syn_path, pattern="*_shap_*_fold_*.csv")
+    # pattern="*_baseline_e_2500_fold_3.csv",
     # shap_list = get_csv_data(syn_path, pattern="*_shap2_fold_*.csv")
 
     for i, syn_data in enumerate(baseline_list):
         source_file = syn_data["source_file"].iloc[0]
         syn_data = syn_data.drop(columns=["source_file"])
 
-        fold_id = re.match(r'.*_fold_(\d+)\.csv', source_file).group(1)
-        real_data = pd.read_csv(os.path.join(dataset_path+"folds/", f"train_fold_{fold_id}.csv"))
+        fold_id = re.match(r'.*fold_(\d+)\.csv', source_file).group(1)
+        real_data = pd.read_csv(os.path.join(dataset_path+"folds/", f"train_fold_{fold_id}.csv")).drop(columns=["sofa", "subject_id"], errors="ignore")
 
         syn_data = postprocessing.postprocess_for_fidelity(syn_data)
         results = run_simple_evaluation(

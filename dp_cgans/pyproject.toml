@@ -44,6 +44,10 @@ dependencies = [
     "lime",
     "tensorboard",
     "packaging",
+    "miceforest",
+    "xgboost",
+    "shap",
+    "lime"
 ]
 
 
