@@ -728,8 +728,10 @@ class Table:
 
 
         for name, field_metadata in self._fields_metadata.items(): ### changed by chang for ontocgans (remove the first column RD column)
-            if name != "IRI":
-
+            if name == "IRI":
+                return reversed_data[self._field_names[1:]]
+                
+            else: 
                 field_type = field_metadata['type']
                 if field_type == 'id' and name not in reversed_data:
                     field_data = self._make_ids(field_metadata, len(reversed_data))

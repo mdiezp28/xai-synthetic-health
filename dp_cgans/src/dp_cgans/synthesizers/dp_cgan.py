@@ -494,7 +494,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
             Whether to use differential privacy
         wandb_config (dict):
             whether to use weights and bias tool to monitor the training
-        conditional_columns (float):
+        ontology (float):
             a matrix of embeddings
     """
 
@@ -502,7 +502,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                  generator_lr=2e-4, generator_decay=1e-6, discriminator_lr=2e-4,
                  discriminator_decay=1e-6, batch_size=500, discriminator_steps=1,
                  log_frequency=True, verbose=False, epochs=300, pac=10, cuda=True, private=False,
-                 wandb=False, xai=None, xai_weight=0, dataset_name='', conditional_columns=None):
+                 wandb=False, xai=None, xai_weight=0, ontology=None, saved_transformer=os.getcwd()+'/fitted_transformer.pkl'):
 
         assert batch_size % 2 == 0
 
@@ -523,11 +523,11 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self.pac = pac
 
         self.private = private
-        self.conditional_columns = conditional_columns
+        self.ontology = ontology
         self.wandb = wandb
+        self.saved_transformer = saved_transformer
         self.xai = xai
         self.xai_weight = xai_weight
-        self.dataset_name = dataset_name
 
         if not cuda or not torch.cuda.is_available():
             device = 'cpu'
@@ -738,14 +738,19 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self._transformer = DataTransformer()
 
         print("Start transforming data...")
-        transformer_path = os.getcwd()+f'/output/transformer/{self.dataset_name}_fitted_transformer.pkl'
-        if os.path.exists(transformer_path):
+
+        if self.saved_transformer and os.path.exists(self.saved_transformer):
+            print("Found existing fitted transformer - ", self.saved_transformer)
             print("Loading fitted transformer...")
-            self._transformer = joblib.load(transformer_path)
+            self._transformer = joblib.load(self.saved_transformer)
         else:
-            print("Start fitting transformer ...")
+            if self.saved_transformer is None:
+                print("No transformer path provided.")
+            else:
+                print("Cannot find existing fitted transformer!!")
+            print("Start fitting new transformer ...")
             self._transformer.fit(train_data, discrete_columns)
-            joblib.dump(self._transformer, transformer_path)
+            joblib.dump(self._transformer, os.getcwd()+'/fitted_transformer.pkl')
             print("Saving fitted transformer...")
 
         print("Finish transforming data / loading transformed data...")

@@ -1,4 +1,5 @@
 import numpy as np
+import os
 from dp_cgans.synthesizers.dp_cgan import DPCGANSynthesizer
 from dp_cgans.base import BaseTabularModel
 
@@ -76,7 +77,7 @@ class DP_CGAN(DPCGANModel):
                  discriminator_decay=1e-6, batch_size=500, discriminator_steps=1,
                  log_frequency=True, verbose=False, epochs=300, pac=10, cuda=True, 
                  rounding='auto', min_value='auto', max_value='auto', private=False,
-                 wandb=False, xai=None, xai_weight=0, dataset_name='', ontology=None):
+                 wandb=False, xai=None, xai_weight=0, ontology=None, saved_transformer=None):
         super().__init__(
             field_names=field_names,
             primary_key=primary_key,
@@ -107,8 +108,9 @@ class DP_CGAN(DPCGANModel):
             'cuda': cuda,
             'private': private,
             'wandb' : wandb,
+            'ontology': ontology,
+            'saved_transformer': saved_transformer,
             'xai': xai,
-            'xai_weight': xai_weight,
-            'dataset_name': dataset_name
+            'xai_weight': xai_weight
         }
 
