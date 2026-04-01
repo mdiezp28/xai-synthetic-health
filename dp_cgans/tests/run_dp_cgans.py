@@ -3,13 +3,13 @@ import pandas as pd
 from dp_cgans import DP_CGAN
 import os
 import torch
-from notebooks.sampling import post_process_synthetic_data
+# from notebooks.sampling import post_process_synthetic_data
 
 class DPCGANConfig: 
     def __init__(self, epochs=1000, batch_size=750, generator_dim=(128, 128, 128),
                  discriminator_dim=(128, 128, 128), generator_lr=5e-5, 
                  discriminator_lr=5e-5, discriminator_steps=5, private=False,
-                 xai_type=None, xai_weight=0, dataset_name="dpcgan"):
+                 xai_type=None, xai_weight=0, saved_transformer=os.getcwd()+'/fitted_transformer.pkl'):
         self.epochs = epochs
         self.batch_size = batch_size
         self.generator_dim = generator_dim
@@ -20,7 +20,7 @@ class DPCGANConfig:
         self.private = private
         self.xai_type = xai_type
         self.xai_weight = xai_weight 
-        self.dataset_name = dataset_name
+        self.saved_transformer = saved_transformer
 
 def run_dp_cgans(tabular_data, output_file, generated_model_path, config= None, save_output=False):
     print(f'Testing DP_CGAN')
@@ -40,7 +40,9 @@ def run_dp_cgans(tabular_data, output_file, generated_model_path, config= None, 
         private=False,
         xai=config.xai_type,
         xai_weight=config.xai_weight,
-        dataset_name=config.dataset_name,
+        saved_transformer=config.saved_transformer
+        # dataset_name=config.dataset_name,
+        # pac=2
     )
     print("Start training model")
     model.fit(tabular_data)
@@ -74,7 +76,7 @@ def sample_dp_cgans(model_name, nb_rows, output_file, current_time=None, conditi
     sample = loaded_model.sample(sample_size, conditions=conditions)
 
     if postprocess:
-        sample = post_process_synthetic_data(sample)
+        # sample = post_process_synthetic_data(sample)
         print(f"Post-processing applied to synthetic data. Valid rows: {len(sample)}")
         if len(sample) > nb_rows:
             sample = sample[: nb_rows]
@@ -146,7 +148,9 @@ def main():
     # run_dp_cgans(tabular_data, "output/syn_data_xgboost.csv", "xgboost_icu_dka")
 
     # 10 most important features according to SHAP values
-    tabular_data = pd.read_csv(os.path.join(result_path, 'shap_nosofa_10_feat_dataset.csv'))
+    # tabular_data = pd.read_csv(os.path.join(result_path, 'shap_nosofa_10_feat_dataset.csv'))
+    # tabular_data = pd.read_csv("C:/Users/Maria/Code/xai-synthetic-health/dp_cgans/resources/icu_dka_train_data.csv").drop(columns=["sofa", "subject_id"], errors="ignore")
+    tabular_data = pd.read_csv("C:/Users/Maria/Code/xai-synthetic-health/dp_cgans/resources/folds/train_fold_1.csv").drop(columns=["sofa", "subject_id"], errors="ignore")
     # remove race column
     # tabular_data = tabular_data.drop("race", axis=1)
     print("Tabular data shape:", tabular_data.shape)
@@ -154,26 +158,26 @@ def main():
     
     # ===== Baseline =====
     config = DPCGANConfig(
-        epochs=1000,
-        batch_size=250,
+        epochs=500,
+        batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
         generator_dim=(128, 128, 128),
         discriminator_dim=(128, 128, 128),
-        generator_lr=5e-5,
-        discriminator_lr=5e-5,
-        discriminator_steps=5,
+        generator_lr=2e-5,
+        discriminator_lr=2e-5,
+        discriminator_steps=10,
         private=False,
         xai_type=None,
         xai_weight=0,
-        dataset_name="shap_icu_dka_10f",
+        saved_transformer=transformers_path+'/fitted_transformer.pkl'
     )
-    run_dp_cgans(tabular_data, "syn_data_10f", generated_model_path, config, save_output=True)
+    run_dp_cgans(tabular_data, "syn_data", generated_model_path, config, save_output=False)
 
     # ===== Synthetic data with SHAP =====
-    xai_list = [0.5, 1, 2, 5, 10, 15, 20]
-    config.xai_type = 'SHAP'
-    for weight in xai_list:
-        config.xai_weight = weight
-        run_dp_cgans(tabular_data, f"syn_data_10f_shap_{weight}", generated_model_path, config, save_output=True)
+    # xai_list = [0.5, 1, 2, 5, 10, 15, 20]
+    # config.xai_type = 'SHAP'
+    # for weight in xai_list:
+    #     config.xai_weight = weight
+    #     run_dp_cgans(tabular_data, f"syn_data_10f_shap_{weight}", generated_model_path, config, save_output=True)
         
 
 if __name__ == "__main__":
