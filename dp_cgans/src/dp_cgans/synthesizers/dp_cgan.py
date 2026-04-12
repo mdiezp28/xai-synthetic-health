@@ -1,4 +1,7 @@
+import io
 import os
+from matplotlib import pyplot as plt
+from PIL import Image
 import torch
 import threading
 import queue
@@ -97,26 +100,31 @@ class Discriminator(Module):
     def split_groups(self, y_real, y_fake, real_cat, fake_cat, pac=10):
         y_real = y_real.view(-1)
         y_fake = y_fake.view(-1)
+        threshold = torch.median(torch.cat([y_real, y_fake]))
+        print("real mean:", y_real.mean().item())
+        print("fake mean:", y_fake.mean().item())
+        print("threshold:", threshold.item())
 
         # Expand masks to match real_cat / fake_cat
-        tp_mask = (y_real > 0).repeat_interleave(pac)
-        fn_mask = (y_real <= 0).repeat_interleave(pac)
+        real_high_mask = (y_real > threshold).repeat_interleave(pac)
+        real_low_mask = (y_real <= threshold).repeat_interleave(pac)
 
-        tn_mask = (y_fake <= 0).repeat_interleave(pac)
-        fp_mask = (y_fake > 0).repeat_interleave(pac)
+        fake_high_mask = (y_fake > threshold).repeat_interleave(pac)
+        fake_low_mask = (y_fake <= threshold).repeat_interleave(pac)
 
-        tp_mask = tp_mask[:real_cat.shape[0]]
-        fn_mask = fn_mask[:real_cat.shape[0]]
-        tn_mask = tn_mask[:fake_cat.shape[0]]
-        fp_mask = fp_mask[:fake_cat.shape[0]]
+        # Ensure masks are the same length as real_cat / fake_cat
+        real_high_mask = real_high_mask[:real_cat.shape[0]]
+        real_low_mask = real_low_mask[:real_cat.shape[0]]
+        fake_low_mask = fake_low_mask[:fake_cat.shape[0]]
+        fake_high_mask = fake_high_mask[:fake_cat.shape[0]]
 
-        tp = real_cat[tp_mask]
-        fn = real_cat[fn_mask]
+        # real_high = real_cat[real_high_mask]
+        # real_low = real_cat[real_low_mask]
 
-        tn = fake_cat[tn_mask]
-        fp = fake_cat[fp_mask]
+        # fake_high = fake_cat[fake_high_mask]
+        # fake_low = fake_cat[fake_low_mask]
 
-        return tp, fn, tn, fp, tp_mask, fn_mask, tn_mask, fp_mask
+        return real_high_mask, real_low_mask, fake_low_mask, fake_high_mask
     
     def calc_shap_importance(self, y_real, y_fake, real_data, fake_data, transformer, device='cpu'):
         shap_batch_size = real_data.size(0) 
@@ -125,10 +133,13 @@ class Discriminator(Module):
         real_data = real_data.detach()
         fake_data = fake_data.detach()
         full_data = torch.cat([real_data, fake_data], dim=0)  
-
         # build masks
-        tp, fn, tn, fp, tp_mask, fn_mask, tn_mask, fp_mask = self.split_groups(y_real, y_fake, real_data, fake_data)
-
+        real_high_mask, real_low_mask, fake_low_mask, fake_high_mask = self.split_groups(y_real, y_fake, real_data, fake_data)
+        # print mix and max in y_real and y_fake to verify thresholding
+        print("y_real min:", y_real.min().item())
+        print("y_real max:", y_real.max().item())
+        print("y_fake min:", y_fake.min().item())
+        print("y_fake max:", y_fake.max().item())
         try:
             self.enable_rowwise(True)
 
@@ -137,7 +148,7 @@ class Discriminator(Module):
         
             # Calculate SHAP values
             explainer = shap.DeepExplainer(self, shap_background)
-
+            print(f"Base value: {explainer.expected_value}")
             sv_full = explainer.shap_values(full_data, check_additivity=False)
             sv_full = _shap_to_torch_matrix(sv_full, full_data)
             
@@ -145,11 +156,11 @@ class Discriminator(Module):
             real_shap = sv_full[:shap_batch_size]
             fake_shap = sv_full[shap_batch_size:shap_batch_size*2]
 
-            shap_tp = real_shap[tp_mask]
-            shap_fn = real_shap[fn_mask]
+            shap_tp = real_shap[real_high_mask]
+            shap_fn = real_shap[real_low_mask]
 
-            shap_tn = fake_shap[tn_mask]
-            shap_fp = fake_shap[fp_mask]
+            shap_tn = fake_shap[fake_low_mask]
+            shap_fp = fake_shap[fake_high_mask]
 
             # if shap_tp.shape[0] < 5 or shap_fp.shape[0] < 5:
             #     return None, None, None, None
@@ -159,7 +170,8 @@ class Discriminator(Module):
 
             def aggregate(x):
                 x = x[:, :data_dim]
-                return torch.stack([x[:, sl].sum(dim=1) for sl in groups], dim=1)
+                result = torch.stack([x[:, sl].sum(dim=1) for sl in groups], dim=1)
+                return result.squeeze(-1)
 
             shap_tp = aggregate(shap_tp)
             shap_fn = aggregate(shap_fn)
@@ -169,13 +181,13 @@ class Discriminator(Module):
             I_tp = I_fn = I_tn = I_fp = None
             print(f"SHAP group shapes: tp={shap_tp.shape}, fn={shap_fn.shape}, tn={shap_tn.shape}, fp={shap_fp.shape}")
             if (shap_tp.shape[0] > min_samples):
-                I_tp = shap_tp.abs().median(dim=0).values.squeeze()
+                I_tp = shap_tp.median(dim=0).values
             if (shap_fn.shape[0] > min_samples):
-                I_fn = shap_fn.abs().median(dim=0).values.squeeze()
+                I_fn = shap_fn.median(dim=0).values
             if (shap_tn.shape[0] > min_samples):
-                I_tn = shap_tn.abs().median(dim=0).values.squeeze()
+                I_tn = shap_tn.median(dim=0).values
             if (shap_fp.shape[0] > min_samples):
-                I_fp = shap_fp.abs().median(dim=0).values.squeeze()
+                I_fp = shap_fp.median(dim=0).values
             print(f"I_tn samples: {shap_tn.shape[0]}, "
                 f"I_tn value: {I_tn.shape if I_tn is not None else None}")
             return I_tp, I_fn, I_tn, I_fp
@@ -413,6 +425,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self._data_sampler = None
         self._generator = None
         self._discriminator = None
+        self._tracked_features_idx = None  # For tracking specific features in TensorBoard
 
 
     @staticmethod
@@ -614,11 +627,13 @@ class DPCGANSynthesizer(BaseSynthesizer):
         else:
             if self.saved_transformer is None:
                 print("No transformer path provided.")
+                transformer_path = os.getcwd()+'/fitted_transformer.pkl'
             else:
-                print("Cannot find existing fitted transformer!!")
+                print(f"Cannot find existing fitted transformer in {self.saved_transformer}!!")
+                transformer_path = self.saved_transformer
             print("Start fitting new transformer ...")
             self._transformer.fit(train_data, discrete_columns)
-            joblib.dump(self._transformer, os.getcwd()+'/fitted_transformer.pkl')
+            joblib.dump(self._transformer, transformer_path)
             print("Saving fitted transformer...")
 
         print("Finish transforming data / loading transformed data...")
@@ -821,49 +836,15 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         pen = self._discriminator.calc_gradient_penalty(
                             real_cat, fake_cat, self._device, self.pac)
 
-                        if i % 50 == 0 and id_ == 0 and n == 0:
+                        if i > 0 and i % 50 == 0 and id_ == 0 and n == 0:
                             tp, fn, tn, fp = self._discriminator.calc_shap_importance(
                                 y_real, y_fake, real_cat, fake_cat, self._transformer, device=self._device
                             )
-                            print(f"SHAP shapes: tp={tp.shape if tp is not None else None}, "
-                                f"fn={fn.shape if fn is not None else None}, "
-                                f"tn={tn.shape if tn is not None else None}, "
-                                f"fp={fp.shape if fp is not None else None}")
                             column_names = [
                                 info.column_name
                                 for info in self._transformer._column_transform_info_list
                             ]
-
-                            # Convert to numpy once
-                            tp_np = tp.detach().cpu().numpy() if tp is not None else None
-                            fn_np = fn.detach().cpu().numpy() if fn is not None else None
-                            tn_np = tn.detach().cpu().numpy() if tn is not None else None
-                            fp_np = fp.detach().cpu().numpy() if fp is not None else None
-
-                            if any(arr is not None for arr in (tp_np, fn_np, tn_np, fp_np)):
-                                self._save_shap_to_excel(tp_np, fn_np, tn_np, fp_np, column_names, i, "shap_importance.xlsx")
-                                for tag, arr in [("tp", tp_np), ("fn", fn_np), ("tn", tn_np), ("fp", fp_np)]:
-                                    if arr is not None:
-                                        writer.add_histogram(f"shap/histograms/{tag}", arr, i)
-
-                                k = 10
-                                if tp_np is not None and fp_np is not None:
-                                    divergence = np.abs(tp_np.flatten() - fp_np.flatten())
-                                    topk_indices = np.argsort(divergence)[-k:]
-                                else:
-                                    importance_source = next(
-                                        a for a in [tp_np, fn_np, tn_np, fp_np] if a is not None
-                                    )
-                                    topk_indices = np.argsort(
-                                        np.abs(importance_source.flatten())
-                                    )[-k:]
-
-                                for tag, arr in [("tp", tp_np), ("fn", fn_np), ("tn", tn_np), ("fp", fp_np)]:
-                                    writer.add_scalars(
-                                        f"feature_importance/{tag}",
-                                        self._build_dict(arr, topk_indices, column_names),
-                                        i,
-                                    )
+                            self._log_shap(writer, tp, fn, tn, fp, column_names, epoch=i)
 
                         optimizerD.zero_grad()
                         # https://machinelearningmastery.com/how-to-implement-wasserstein-loss-for-generative-adversarial-networks/
@@ -1206,3 +1187,78 @@ class DPCGANSynthesizer(BaseSynthesizer):
         if values is None:
             return {column_names[j]: np.nan for j in indices}
         return {column_names[j]: float(values.flatten()[j]) for j in indices}
+    
+    
+    def _log_shap(self, writer, tp, fn, tn, fp, column_names, epoch):
+        # Convert to numpy once
+        tp_np = tp.detach().cpu().numpy() if tp is not None else None
+        fn_np = fn.detach().cpu().numpy() if fn is not None else None
+        tn_np = tn.detach().cpu().numpy() if tn is not None else None
+        fp_np = fp.detach().cpu().numpy() if fp is not None else None
+
+        groups = {"TP": tp_np, "FN": fn_np, "TN": tn_np, "FP": fp_np}
+
+        if tn_np is not None:
+            sort_order = np.argsort(tn_np)  # most negative first
+        else:
+            sort_order = np.arange(len(column_names))
+
+        sorted_names = [column_names[o] for o in sort_order]
+
+        self._log_shap_heatmap(writer, groups, sort_order, sorted_names, epoch)
+        self._log_shap_scalars(writer, groups, column_names, epoch)
+
+    def _log_shap_heatmap(self, writer, groups, sort_order, sorted_names, epoch):
+        fig, axes = plt.subplots(4, 1, figsize=(60, 16), dpi=100)
+
+        for ax, (group_name, group_np) in zip(axes, groups.items()):
+            if group_np is None or len(group_np) == 0:
+                ax.set_title(f"{group_name} (empty)")
+                ax.axis("off")
+                continue
+
+            mean_shap = group_np[sort_order] 
+            matrix = mean_shap.reshape(1, -1)              # [1, n_features]
+
+            vmax = np.abs(matrix).max() or 1e-6            # avoid vmax=0
+            im = ax.imshow(matrix, cmap="RdBu_r", aspect="auto", vmin=-vmax, vmax=vmax)
+
+            ax.set_xticks(range(len(sorted_names)))
+            ax.set_xticklabels(sorted_names, rotation=90, fontsize=7)
+            ax.set_yticks([0])
+            ax.set_yticklabels([group_name], fontsize=10)
+
+            # Vertical divider between negative and positive region
+            if group_name == "TN":
+                n_negative = (mean_shap < 0).sum()
+                ax.axvline(n_negative - 0.5, color="black", linewidth=1.5, linestyle="--")
+
+            plt.colorbar(im, ax=ax, label="Mean SHAP")
+
+        plt.suptitle(f"SHAP heatmap by group — epoch {epoch}", fontsize=14)
+        plt.tight_layout()
+
+        # Save to buffer → TensorBoard
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+        buf.seek(0)
+
+        img = Image.open(buf)
+        img_tensor = torch.tensor(np.array(img)).permute(2, 0, 1)[:3]  # [3, H, W] drop alpha if present
+
+        writer.add_image("SHAP/heatmap_by_group", img_tensor, epoch)
+        buf.close()
+        plt.close(fig)
+
+
+    def _log_shap_scalars(self, writer, groups, column_names, epoch):
+        if self._tracked_features_idx is None and groups["TN"] is not None:
+            self._tracked_features_idx = np.argsort(groups["TN"])[:10]  # 10 most negative TN features
+
+        if self._tracked_features_idx is not None:
+            for tag, arr in groups.items():
+                writer.add_scalars(
+                    f"feature_importance/{tag}",
+                    self._build_dict(arr, self._tracked_features_idx, column_names),
+                    epoch
+                )
