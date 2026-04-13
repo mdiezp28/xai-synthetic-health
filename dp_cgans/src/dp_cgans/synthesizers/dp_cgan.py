@@ -1211,6 +1211,14 @@ class DPCGANSynthesizer(BaseSynthesizer):
     def _log_shap_heatmap(self, writer, groups, sort_order, sorted_names, epoch):
         fig, axes = plt.subplots(4, 1, figsize=(60, 16), dpi=100)
 
+        all_values = np.concatenate([
+            group_np for group_np in groups.values()
+            if group_np is not None and len(group_np) > 0
+        ])
+        global_min = all_values.min() or -1
+        global_max = all_values.max() or 1
+        vmax = max(abs(global_min), abs(global_max))
+
         for ax, (group_name, group_np) in zip(axes, groups.items()):
             if group_np is None or len(group_np) == 0:
                 ax.set_title(f"{group_name} (empty)")
@@ -1220,8 +1228,15 @@ class DPCGANSynthesizer(BaseSynthesizer):
             mean_shap = group_np[sort_order] 
             matrix = mean_shap.reshape(1, -1)              # [1, n_features]
 
-            vmax = np.abs(matrix).max() or 1e-6            # avoid vmax=0
+            # vmax = np.abs(matrix).max() 
             im = ax.imshow(matrix, cmap="RdBu_r", aspect="auto", vmin=-vmax, vmax=vmax)
+            for j, val in enumerate(mean_shap):
+                ax.text(
+                    j, 0, f"{val:.2f}",
+                    ha="center", va="center",
+                    fontsize=10,
+                    color="white" if abs(val) > vmax * 0.5 else "black"  # contrast based on intensity
+    )
 
             ax.set_xticks(range(len(sorted_names)))
             ax.set_xticklabels(sorted_names, rotation=90, fontsize=7)
