@@ -9,8 +9,9 @@ import pandas as pd
 from syn_data_evaluation.data import postprocessing
 
 
-def get_submetadata(metadata: Dict, columns: List[str]) -> Dict:
+def get_submetadata(metadata_file: str, columns: List[str]) -> Dict:
     """Extract metadata for a subset of columns."""
+    metadata = SingleTableMetadata.load_from_json(metadata_file).to_dict()
     submetadata = {
         'columns': {},
         'primary_key': metadata.get('primary_key', None),
@@ -44,7 +45,7 @@ def run_experiment():
     # # Fidelity evaluation on full training set
     real_data = pd.read_csv(os.path.join(dataset_path, 'icu_dka_train_data.csv')).drop(columns=["sofa", "subject_id"], errors="ignore")
     # print("Real data shape:", real_data.shape)
-    metadata = get_submetadata(SingleTableMetadata.load_from_json("c:/Users/Maria/Code/xai-synthetic-health/notebooks/icu_dka_metadata.json").to_dict(), real_data.columns)
+    metadata = get_submetadata("c:/Users/Maria/Code/xai-synthetic-health/notebooks/icu_dka_metadata.json", real_data.columns)
     # syn_data_baseline = pd.read_csv(os.path.join(syn_path, '2026_02_03_11_14_40_baseline.csv'))
     
     # syn_data_baseline = postprocessing.postprocess_for_fidelity(syn_data_baseline)
@@ -83,7 +84,7 @@ def run_experiment():
 
         syn_data = postprocessing.postprocess_for_fidelity(syn_data)
         results = run_simple_evaluation(
-            real_data, syn_data, metadata,
+            real_data, real_data, metadata,
             experiment_name=source_file.replace(".csv",""),
             results_csv=os.path.join(results_path,'fidelity', 'fidelity_results.csv')
         )

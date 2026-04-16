@@ -34,8 +34,8 @@ class FidelityEvaluator:
     - Full: Comprehensive evaluation with plots and detailed reports
     """
     
-    def __init__(self, real_data: pd.DataFrame, synthetic_data: pd.DataFrame, 
-                 metadata: SingleTableMetadata, verbose: bool = True):
+    def __init__(self, real_data: pd.DataFrame = None, synthetic_data: pd.DataFrame = None, 
+                 metadata: SingleTableMetadata = None, verbose: bool = True):
         """
         Initialize the FidelityEvaluator.
         
@@ -507,8 +507,17 @@ class FidelityEvaluator:
         """
         # Gather violations
         nn_viol = FidelityEvaluator.check_non_negative(df, NON_NEGATIVE_COLUMNS)
+        nn_row_viol = nn_viol.any(axis=1)
+        if nn_row_viol.any():
+            logger.info(f"Found {nn_row_viol.sum()} rows with non-negative violations.")
         range_viol = FidelityEvaluator.check_ranges(df, RANGE_CONSTRAINTS)
+        range_row_viol = range_viol.any(axis=1)
+        if range_row_viol.any():
+            logger.info(f"Found {range_row_viol.sum()} rows with range violations.")
         bin_viol = FidelityEvaluator.check_binary(df, BINARY_COLUMNS)
+        bin_row_viol = bin_viol.any(axis=1)
+        if bin_row_viol.any():
+            logger.info(f"Found {bin_row_viol.sum()} rows with binary violations.")
         
         # Combine all violations
         all_viol = pd.concat([nn_viol, range_viol, bin_viol], axis=1)
