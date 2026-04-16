@@ -9,7 +9,7 @@ class DPCGANConfig:
     def __init__(self, epochs=1000, batch_size=750, generator_dim=(128, 128, 128),
                  discriminator_dim=(128, 128, 128), generator_lr=5e-5, 
                  discriminator_lr=5e-5, discriminator_steps=5, private=False,
-                 xai_type=None, xai_weight=0, saved_transformer=os.getcwd()+'/fitted_transformer.pkl'):
+                 xai_type=None, xai_weight=0, saved_transformer=os.getcwd()+'/fitted_transformer.pkl', pac=10):
         self.epochs = epochs
         self.batch_size = batch_size
         self.generator_dim = generator_dim
@@ -21,6 +21,7 @@ class DPCGANConfig:
         self.xai_type = xai_type
         self.xai_weight = xai_weight 
         self.saved_transformer = saved_transformer
+        self.pac = pac
 
 def run_dp_cgans(tabular_data, output_file, generated_model_path, config= None, save_output=False):
     print(f'Testing DP_CGAN')
@@ -40,9 +41,9 @@ def run_dp_cgans(tabular_data, output_file, generated_model_path, config= None, 
         private=False,
         xai=config.xai_type,
         xai_weight=config.xai_weight,
-        saved_transformer=config.saved_transformer
+        saved_transformer=config.saved_transformer,
         # dataset_name=config.dataset_name,
-        # pac=2
+        pac=config.pac
     )
     print("Start training model")
     model.fit(tabular_data)
@@ -114,9 +115,7 @@ def generate_balanced_samples(model_path, nb_rows, output_file, condition_col, p
     return combined
 
 def main():
-    result_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/results/"
     generated_model_path = 'output/generators'
-    
     os.makedirs(generated_model_path, exist_ok=True)
     transformers_path = 'output/transformer'
     os.makedirs(transformers_path, exist_ok=True)
@@ -139,18 +138,7 @@ def main():
     # tabular_data = pd.read_csv("../resources/example_tabular_data_UCIAdult.csv")
     # run_dp_cgans(tabular_data, "output/syn_data_file_UCIAdult.csv", "example_UCIAdult")
 
-    # 30 most important features according to DKA paper
-    # tabular_data = pd.read_csv("../resources/paper_features_icu_dka_dataset.csv")
-    # run_dp_cgans(tabular_data, "output/syn_data_paper_features.csv", "paper_icu_dka")
-
-    # 30 most important features according to XGBOOST model 
-    # tabular_data = pd.read_csv("../resources/xgboost_30_important_features_icu_dka_dataset.csv")
-    # run_dp_cgans(tabular_data, "output/syn_data_xgboost.csv", "xgboost_icu_dka")
-
-    # 10 most important features according to SHAP values
-    # tabular_data = pd.read_csv(os.path.join(result_path, 'shap_nosofa_10_feat_dataset.csv'))
-    # tabular_data = pd.read_csv("C:/Users/Maria/Code/xai-synthetic-health/dp_cgans/resources/icu_dka_train_data.csv").drop(columns=["sofa", "subject_id"], errors="ignore")
-    tabular_data = pd.read_csv("C:/Users/Maria/Code/xai-synthetic-health/dp_cgans/resources/folds/train_fold_1.csv").drop(columns=["sofa", "subject_id"], errors="ignore")
+    tabular_data = pd.read_csv("../resources/folds/train_fold_1.csv").drop(columns=["sofa", "subject_id"], errors="ignore")
     # remove race column
     # tabular_data = tabular_data.drop("race", axis=1)
     print("Tabular data shape:", tabular_data.shape)
@@ -158,19 +146,35 @@ def main():
     
     # ===== Baseline =====
     config = DPCGANConfig(
-        epochs=300,
+        epochs=2000,
         batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
         generator_dim=(128, 128, 128),
         discriminator_dim=(128, 128, 128),
-        generator_lr=2e-5,
-        discriminator_lr=2e-5,
-        discriminator_steps=10,
+        generator_lr=1e-4,
+        discriminator_lr=1e-4,
+        discriminator_steps=5,
+        pac=10,
         private=False,
         xai_type=None,
         xai_weight=0,
         saved_transformer=transformers_path+'/fitted_transformer.pkl'
     )
-    run_dp_cgans(tabular_data, "syn_data", generated_model_path, config, save_output=False)
+    # config = DPCGANConfig(
+    #     epochs=3500,
+    #     batch_size=130, # ~6% of 1086 (64) and ~6% of 1711 (100)
+    #     generator_dim=(256, 256, 256),
+    #     discriminator_dim=(256, 256, 256),
+    #     generator_lr=2e-5,
+    #     discriminator_lr=2e-5,
+    #     discriminator_steps=5,
+    #     pac=10,
+    #     private=False,
+    #     xai_type=None,
+    #     xai_weight=0,
+    #     saved_transformer=transformers_path+'/fitted_transformer.pkl'
+    # )
+    run_dp_cgans(tabular_data, "syn_data_fold_1", generated_model_path, config, save_output=True)
+    # run_dp_cgans(tabular_data, "syn_data_1", generated_model_path, config_1, save_output=True)
 
     # ===== Synthetic data with SHAP =====
     # xai_list = [0.5, 1, 2, 5, 10, 15, 20]

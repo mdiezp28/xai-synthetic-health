@@ -140,7 +140,7 @@ class Discriminator(Module):
         try:
             self.enable_rowwise(True)
 
-            background_size = min(100, real_data.size(0))
+            background_size = min(150, real_data.size(0))
             shap_background = real_data[:background_size]
         
             # Calculate SHAP values
