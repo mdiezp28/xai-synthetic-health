@@ -54,10 +54,10 @@ def run_dp_cgans(tabular_data, output_file, generated_model_path, config= None, 
     model_name = f'{generated_model_path}/{current_time}_dpcgans_icu_dka.pkl'
     model.save(model_name)
     print(f'Model saved to {model_name}')
-
+    sample = None
     if save_output:
-        sample_dp_cgans(model_name, len(tabular_data), output_file, current_time)
-    return model_name
+        sample = sample_dp_cgans(model_name, len(tabular_data), output_file, current_time)
+    return  model_name, sample
 
 
 def sample_dp_cgans(model_name, nb_rows, output_file, current_time=None, conditions=None, postprocess=False):
@@ -68,9 +68,9 @@ def sample_dp_cgans(model_name, nb_rows, output_file, current_time=None, conditi
     sample_size = nb_rows + nb_rows//2 if postprocess else nb_rows
 
     if current_time is None:
-        output_name = f'output/{output_file}.csv'
+        output_name = f'output/synthetic_data/{output_file}.csv'
     else: 
-        output_name = f'output/{current_time}_{output_file}.csv'
+        output_name = f'output/synthetic_data/{current_time}_{output_file}.csv'
 
     print(f'Sampling {sample_size} seen rows')
     sample = loaded_model.sample(sample_size, conditions=conditions)
@@ -158,7 +158,7 @@ def main():
     
     # ===== Baseline =====
     config = DPCGANConfig(
-        epochs=500,
+        epochs=300,
         batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
         generator_dim=(128, 128, 128),
         discriminator_dim=(128, 128, 128),

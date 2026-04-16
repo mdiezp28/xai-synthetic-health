@@ -46,8 +46,7 @@ dependencies = [
     "packaging",
     "miceforest",
     "xgboost",
-    "shap",
-    "lime"
+    "sdv"
 ]
 
 
