@@ -26,7 +26,7 @@ NON_NEGATIVE_COLUMNS = [
 RANGE_CONSTRAINTS = {
     # demographics
     "age": (0, 100),
-    "weight": (2, 200),  # kg
+    "weight": (30, 250),  # kg
 
     # scores
     "sofa": (0, 24),
