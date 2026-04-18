@@ -8,6 +8,7 @@ from syn_data_evaluation.evaluation.fidelity_evaluator import run_simple_evaluat
 from syn_data_evaluation.experiments.run_fidelity import get_submetadata
 from syn_data_evaluation.experiments.run_utility import ExperimentRunner
 from tests.run_dp_cgans import DPCGANConfig, run_dp_cgans
+
 RESOURCE_FOLDER = "./dp_cgans/resources/"
 
 def make_group_stratified_train_test(df, label_col, group_col, test_size=0.25, random_state=42):
@@ -56,7 +57,7 @@ def assert_no_patient_leakage(train_df, test_df, group_col):
     assert len(overlap) == 0, f"Patient leakage detected! Overlap size: {len(overlap)}"
 
 
-def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital_death", group_col="subject_id", save_folds=True):
+def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital_death", group_col="subject_id", save_folds=True, config=None, exp_name="baseline", generated_model_path="output/generators", syn_path="output/synthetic_data", evaluation_path="output/evaluation"):
     if real_data is not None:
         # 1) Train/Test 75/25, stratified + grouped
         train_data, test_data = make_group_stratified_train_test(
@@ -109,36 +110,16 @@ def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital
     
     # Data is now ready for training and evaluation with no patient leakage across train/test and train/val splits.
     # Clean subject_id column and SOFA
+    train_data = train_data.drop(columns=["subject_id", "sofa"], errors="ignore")
+    test_data = test_data.drop(columns=["subject_id", "sofa"], errors="ignore")
     # Create synthetic data using DP-CGANS
-    generated_model_path = 'output/generators'
-    os.makedirs(generated_model_path, exist_ok=True)
-    transformers_path = 'output/transformer'
-    os.makedirs(transformers_path, exist_ok=True)
-    evaluation_path = 'output/evaluation'
-    os.makedirs(evaluation_path, exist_ok=True)
-    # syn_path = 'output/synthetic_data'
-    # os.makedirs(syn_path, exist_ok=True)
-    config = DPCGANConfig(
-        epochs=5,
-        batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
-        generator_dim=(128, 128, 128),
-        discriminator_dim=(128, 128, 128),
-        generator_lr=2e-5,
-        discriminator_lr=2e-5,
-        discriminator_steps=10,
-        private=False,
-        xai_type=None,
-        xai_weight=0,
-        saved_transformer=transformers_path+'/fitted_transformer.pkl'
-    )
     metadata = get_submetadata("./notebooks/icu_dka_metadata.json", train_data.columns)
-    exp_name = "baseline"
     for file in train_files:
         fold_number = re.search(r"train_fold_(\d+)\.csv", file).group(1)
         tabular_data = pd.read_csv(file).drop(columns=["subject_id", "sofa"])
         validation = pd.read_csv(os.path.join(folds_dir, f"val_fold_{fold_number}.csv")).drop(columns=["subject_id", "sofa"])
         print(f"----- Training fold {fold_number} with {len(tabular_data)} rows. -----")
-        model_name, syn_data =run_dp_cgans(tabular_data, f"syn_data_fold_{fold_number}", generated_model_path, config, save_output=True)
+        model_name, syn_data =run_dp_cgans(tabular_data, f"{syn_path}/syn_data_fold_{fold_number}.csv", generated_model_path, config, save_output=True)
         # Evaluate Fidelity
         print(f"Evaluating fidelity for fold {fold_number}... - Model: {model_name}")
         syn_data_fi = postprocessing.postprocess_for_fidelity(syn_data)
@@ -163,5 +144,29 @@ if __name__ == "__main__":
     train_data = pd.read_csv(os.path.join(RESOURCE_FOLDER, "icu_dka_train_data.csv"))
     test_data = pd.read_csv(os.path.join(RESOURCE_FOLDER, "icu_dka_test_data.csv"))
 
+    output_dir = "output"
+    generated_model_path = f'{output_dir}/generators'
+    os.makedirs(generated_model_path, exist_ok=True)
+    transformers_path = f'{output_dir}/transformer'
+    os.makedirs(transformers_path, exist_ok=True)
+    evaluation_path = f'{output_dir}/evaluation'
+    os.makedirs(evaluation_path, exist_ok=True)
+    syn_path = f'{output_dir}/synthetic_data'
+    os.makedirs(syn_path, exist_ok=True)
+    config = DPCGANConfig(
+        epochs=5,
+        batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
+        generator_dim=(128, 128, 128),
+        discriminator_dim=(128, 128, 128),
+        generator_lr=2e-5,
+        discriminator_lr=2e-5,
+        discriminator_steps=10,
+        private=False,
+        xai_type=None,
+        xai_weight=0,
+        saved_transformer=transformers_path+'/fitted_transformer.pkl'
+    )
+    exp_name = "baseline"
+
     # main(real_data=real_data, save_folds=True)
-    main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False)
+    main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name=exp_name, generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path)

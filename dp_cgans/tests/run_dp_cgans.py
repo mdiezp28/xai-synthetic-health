@@ -68,9 +68,9 @@ def sample_dp_cgans(model_name, nb_rows, output_file, current_time=None, conditi
     sample_size = nb_rows + nb_rows//2 if postprocess else nb_rows
 
     if current_time is None:
-        output_name = f'output/synthetic_data/{output_file}.csv'
+        output_name = f'{output_file}.csv'
     else: 
-        output_name = f'output/synthetic_data/{current_time}_{output_file}.csv'
+        output_name = f'{output_file}_{current_time}.csv'
 
     print(f'Sampling {sample_size} seen rows')
     sample = loaded_model.sample(sample_size, conditions=conditions)
