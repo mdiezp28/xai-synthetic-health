@@ -100,23 +100,20 @@ class Discriminator(Module):
     def split_groups(self, y_real, y_fake, real_cat, fake_cat, pac=10):
         y_real = y_real.view(-1)
         y_fake = y_fake.view(-1)
-        threshold = torch.median(torch.cat([y_real, y_fake]))
-        print("real mean:", y_real.mean().item())
+        # threshold = torch.median(torch.cat([y_real, y_fake]))
+        threshold = y_real.mean()
+        print("real mean - threshold:", threshold.item())
         print("fake mean:", y_fake.mean().item())
-        print("threshold:", threshold.item())
+        print("mean:", torch.mean(torch.cat([y_real, y_fake])).item())
+        print("median:", torch.median(torch.cat([y_real, y_fake])).item())
 
         # Expand masks to match real_cat / fake_cat
-        real_high_mask = (y_real > threshold).repeat_interleave(pac)
-        real_low_mask = (y_real <= threshold).repeat_interleave(pac)
-
-        fake_high_mask = (y_fake > threshold).repeat_interleave(pac)
-        fake_low_mask = (y_fake <= threshold).repeat_interleave(pac)
-
         # Ensure masks are the same length as real_cat / fake_cat
-        real_high_mask = real_high_mask[:real_cat.shape[0]]
-        real_low_mask = real_low_mask[:real_cat.shape[0]]
-        fake_low_mask = fake_low_mask[:fake_cat.shape[0]]
-        fake_high_mask = fake_high_mask[:fake_cat.shape[0]]
+        real_high_mask = (y_real > threshold)[:real_cat.shape[0]]
+        real_low_mask = (y_real <= threshold)[:real_cat.shape[0]]
+        fake_high_mask = (y_fake > threshold)[:fake_cat.shape[0]]
+        fake_low_mask = (y_fake <= threshold)[:fake_cat.shape[0]]
+
 
         # real_high = real_cat[real_high_mask]
         # real_low = real_cat[real_low_mask]
@@ -177,19 +174,28 @@ class Discriminator(Module):
             shap_fn = aggregate(shap_fn)
             shap_tn = aggregate(shap_tn)
             shap_fp = aggregate(shap_fp)
-            min_samples = 3
-            I_tp = I_fn = I_tn = I_fp = None
+            # min_samples = 3
+            # I_tp = I_fn = I_tn = I_fp = None
             print(f"SHAP group shapes: tp={shap_tp.shape}, fn={shap_fn.shape}, tn={shap_tn.shape}, fp={shap_fp.shape}")
-            if (shap_tp.shape[0] > min_samples):
-                I_tp = shap_tp.median(dim=0).values
-            if (shap_fn.shape[0] > min_samples):
-                I_fn = shap_fn.median(dim=0).values
-            if (shap_tn.shape[0] > min_samples):
-                I_tn = shap_tn.median(dim=0).values
-            if (shap_fp.shape[0] > min_samples):
-                I_fp = shap_fp.median(dim=0).values
-            print(f"I_tn samples: {shap_tn.shape[0]}, "
-                f"I_tn value: {I_tn.shape if I_tn is not None else None}")
+            # if (shap_tp.shape[0] > min_samples):
+            #     I_tp = shap_tp.median(dim=0).values
+            # if (shap_fn.shape[0] > min_samples):
+            #     I_fn = shap_fn.median(dim=0).values
+            # if (shap_tn.shape[0] > min_samples):
+            #     I_tn = shap_tn.median(dim=0).values
+            # if (shap_fp.shape[0] > min_samples):
+            #     I_fp = shap_fp.median(dim=0).values
+            I_tp = shap_tp.mean(dim=0) if shap_tp.shape[0] > 0 else None
+            I_fn = shap_fn.mean(dim=0) if shap_fn.shape[0] > 0 else None
+            I_tn = shap_tn.mean(dim=0) if shap_tn.shape[0] > 0 else None
+            I_fp = shap_fp.mean(dim=0) if shap_fp.shape[0] > 0 else None
+
+            # average total contribution per sample in the group
+            tp_total = shap_tp.sum(dim=1).mean()
+            fn_total = shap_fn.sum(dim=1).mean()
+            tn_total = shap_tn.sum(dim=1).mean()
+            fp_total = shap_fp.sum(dim=1).mean()
+            print(f"Avg SHAP contribution: tp={tp_total.item()}, fn={fn_total.item()}, tn={tn_total.item()}, fp={fp_total.item()}")
             return I_tp, I_fn, I_tn, I_fp
             
         finally:
@@ -233,10 +239,21 @@ class Residual(Module):
 
 
 class Generator(Module):
+    """
+    Generator with an optional SHAP-based focus signal.
 
-    def __init__(self, embedding_dim, generator_dim, data_dim):
+    Args:
+        embedding_dim (int): Size of the random noise input.
+        generator_dim (tuple): Hidden layer sizes (Residual blocks).
+        data_dim (int): Output dimension (transformed data).
+        focus_dim (int): Size of the focus signal appended to the input.
+            Set to 0 to disable (default behaviour, fully backward-compatible).
+    """
+
+    def __init__(self, embedding_dim, generator_dim, data_dim, focus_dim: int = 0):
         super(Generator, self).__init__()
-        dim = embedding_dim
+        self.focus_dim = focus_dim
+        dim = embedding_dim + focus_dim          # ← focus signal widens the input
         seq = []
         for item in list(generator_dim):
             seq += [Residual(dim, item)]
@@ -376,16 +393,25 @@ class DPCGANSynthesizer(BaseSynthesizer):
         private (bool): 
             Whether to use differential privacy
         wandb_config (dict):
-            whether to use weights and bias tool to monitor the training
+            Whether to use weights and bias tool to monitor the training.
         ontology (float):
-            a matrix of embeddings
+            A matrix of embeddings.
+        focus_threshold (float):
+            Threshold for selecting worst-performing features (by TN SHAP) whose focus signal is
+            sent to the Generator. Set to None to disable the focus signal entirely.
+            Defaults to -0.1.
+        focus_update_interval (int):
+            How many epochs between focus-signal refreshes. Defaults to 50.
     """
 
     def __init__(self, embedding_dim=128, generator_dim=(256, 256), discriminator_dim=(256, 256),
                  generator_lr=2e-4, generator_decay=1e-6, discriminator_lr=2e-4,
                  discriminator_decay=1e-6, batch_size=500, discriminator_steps=1,
                  log_frequency=True, verbose=False, epochs=300, pac=10, cuda=True, private=False,
-                 wandb=False, xai=None, xai_weight=0, ontology=None, saved_transformer=os.getcwd()+'/fitted_transformer.pkl'):
+                 wandb=False, xai=None, xai_weight=0, ontology=None,
+                 saved_transformer=os.getcwd()+'/fitted_transformer.pkl',
+                 focus_threshold: float = -0.1,
+                 focus_update_interval: int = 50):
 
         assert batch_size % 2 == 0
 
@@ -412,6 +438,10 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self.xai = xai
         self.xai_weight = xai_weight
 
+        # ── Focus-signal hyper-parameters ──────────────────────────────────────
+        self.focus_threshold = focus_threshold                # 0 - disabled
+        self.focus_update_interval = focus_update_interval    # epochs between SHAP refreshes
+
         if not cuda or not torch.cuda.is_available():
             device = 'cpu'
         elif isinstance(cuda, str):
@@ -426,6 +456,80 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self._generator = None
         self._discriminator = None
         self._tracked_features_idx = None  # For tracking specific features in TensorBoard
+
+        # ── Focus-signal state (initialised in fit()) ──────────────────────────
+        # _focus_signal : FloatTensor [data_dim]  – per-feature weight in [0, 1]
+        #                 broadcast to [batch, data_dim] before being fed to G.
+        # _focus_col_signal : FloatTensor [n_cols] – per-column SHAP importance
+        #                     (used for logging / diagnostics).
+        self._focus_signal = None          # shape: [data_dim]
+        self._focus_col_signal = None      # shape: [n_original_cols]
+
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Focus-signal helpers
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _init_focus_signal(self, data_dim: int) -> None:
+        """Initialise a zero focus signal (no guidance at epoch 0)."""
+        if self.focus_threshold is not None:
+            self._focus_signal = torch.zeros(data_dim, device=self._device)
+        else:
+            self._focus_signal = None
+
+    def _update_focus_signal(self, I_tn: torch.Tensor, threshold: float = -0.01) -> None:
+        if self._focus_signal is None or I_tn is None:
+            return
+
+        I_tn_cpu = I_tn.detach().cpu()
+        
+        groups = _build_feature_groups(self._transformer.output_info_list)
+        data_dim = self._transformer.output_dimensions
+
+        selected_mask = I_tn_cpu < threshold
+        selected_indices = selected_mask.nonzero(as_tuple=True)[0]
+
+        new_signal = torch.zeros(data_dim, device=self._device)
+        col_signal = torch.zeros(I_tn_cpu.shape[0], device=self._device)
+        if selected_indices.numel() == 0:
+            # Generator is doing well on all columns — zero out the signal
+            print("[focus] No columns below threshold — clearing focus signal")
+        else:
+
+            # Sort selected by most negative first
+            selected_values = I_tn_cpu[selected_indices]
+            sort_order = torch.argsort(selected_values)          # ascending
+            selected_indices = selected_indices[sort_order]
+            selected_values  = selected_values[sort_order]
+            
+            # Soft weights: normalise magnitudes so worst = 1.0
+            magnitudes = selected_values.abs()
+            soft_weights = magnitudes / magnitudes.max()
+
+            for rank, col_idx in enumerate(selected_indices.tolist()):
+                if col_idx < len(groups):
+                    sl = groups[col_idx]
+                    new_signal[sl] = float(soft_weights[rank])
+                    col_signal[col_idx] = float(soft_weights[rank])
+
+            print(f"[focus] Updated focus signal — {selected_indices.numel()} columns below {threshold}: "
+            f"{selected_indices.tolist()}  "
+            f"(soft weights: {[f'{w:.3f}' for w in soft_weights.tolist()]})")
+
+        # EMA smoothing
+        ema_alpha = 0.7
+        self._focus_signal = ema_alpha * new_signal + (1 - ema_alpha) * self._focus_signal
+        self._focus_col_signal = col_signal
+        
+
+    def _get_focus_batch(self, batch_size: int) -> torch.Tensor:
+        """
+        Return a [batch_size, data_dim] tensor with the current focus signal
+        broadcast across the batch.  Returns an empty tensor if disabled.
+        """
+        if self._focus_signal is None:
+            return torch.empty(batch_size, 0, device=self._device)
+        return self._focus_signal.unsqueeze(0).expand(batch_size, -1)   # [B, data_dim]
 
 
     @staticmethod
@@ -647,11 +751,17 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
         data_dim = self._transformer.output_dimensions
 
+        # ── focus signal dimension ─────────────────────────────────────────────
+        # The focus signal has the same width as the transformed data so the
+        # generator sees a per-feature "struggle" mask alongside its noise input.
+        focus_dim = data_dim if self.focus_threshold is not None else 0
+        self._init_focus_signal(data_dim)
 
         self._generator = Generator(
             self._embedding_dim + self._data_sampler.dim_cond_vec(), # number of categories in the whole dataset.
             self._generator_dim,
-            data_dim
+            data_dim,
+            focus_dim=focus_dim,
         ).to(self._device)
 
         self._discriminator = Discriminator(
@@ -679,6 +789,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
             f"Device: {self._device}",
             f"Rows (transformed): {len(train_data)}",
             f"Data Dim: {data_dim}",
+            f"Focus Dim: {focus_dim}",
             f"Cond Vec Dim: {self._data_sampler.dim_cond_vec()}",
             f"Batch Size: {self._batch_size}",
             f"Epochs: {epochs}",
@@ -691,7 +802,9 @@ class DPCGANSynthesizer(BaseSynthesizer):
             f"Log Frequency: {self._log_frequency}",
             f"Private: {self.private}",
             f"XAI: {self.xai}",
-            f"XAI Weight: {self.xai_weight}"
+            f"XAI Weight: {self.xai_weight}",
+            f"Focus threshold: {self.focus_threshold}",
+            f"Focus update interval: {self.focus_update_interval}",
         ]
         running_details = "\n".join(run_lines)
         writer.add_text("run_summary", f"<pre>{running_details}</pre>", 0)
@@ -712,10 +825,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
         steps_per_epoch = max(len(train_data) // self._batch_size, 1)
 
-        # DISABLED: Multi-threading causes severe CPU/memory contention that kills GPU performance
-        # Python's GIL and numpy operations don't parallelize well
-        # prefetcher = DataPrefetcher(...)
-        prefetcher = None
+        prefetcher = None  # Disabled: threading caused contention
 
         print(f"Training Configuration:")
         print(f"  Batch size: {self._batch_size}")
@@ -724,6 +834,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
         print(f"  Discriminator dim: {self._discriminator_dim}")
         print(f"  Device: {self._device}")
         print(f"  Data shape: {train_data.shape}")
+        print(f"  Focus signal: {'ENABLED (threshold: ' + str(self.focus_threshold) + ')' if self.focus_threshold is not None else 'DISABLED'}")
         print(f"  Prefetching: DISABLED (direct sampling - threading caused contention)")
 
 
@@ -734,6 +845,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
             loss_file.write("Epoch,Generator_Loss,Discriminator_Loss,Timestamp\n")
             for i in epoch_iterator:
                 if i == 0 and self._device.type == 'cuda':
+                    torch.cuda.empty_cache()
                     torch.cuda.init()
                     torch.cuda.synchronize()
                     print("CUDA initialized:", torch.cuda.get_device_name(0))
@@ -789,7 +901,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                             c_pair_1, m_pair_1, col_pair_1, opt_pair_1 = condvec_pair
                             c_pair_1 = torch.from_numpy(c_pair_1).to(self._device, non_blocking=True)
                             m_pair_1 = torch.from_numpy(m_pair_1).to(self._device, non_blocking=True)
-                            fakez = torch.cat([fakez, c_pair_1], dim=1)
+                            fakez = torch.cat([fakez, c_pair_1], dim=1)  # categories (unique value count) + continuous (1+n_components)
                             c_pair_2 = c_pair_1[perm]
 
                         real = torch.from_numpy(real.astype('float32')).to(self._device, non_blocking=True)
@@ -798,7 +910,11 @@ class DPCGANSynthesizer(BaseSynthesizer):
                             data_time = time.time() - data_start
                             forward_start = time.time()
 
-                        fake = self._generator(fakez) # categories (unique value count) + continuous (1+n_components)
+                        # ── Append focus signal to generator input ─────────────
+                        focus_batch = self._get_focus_batch(self._batch_size)  # [B, data_dim] or [B, 0]
+                        fakez_with_focus = torch.cat([fakez, focus_batch], dim=1)
+
+                        fake = self._generator(fakez_with_focus)
                         fakeact = self._apply_activate(fake)
 
                         if col_pair_1 is not None:
@@ -812,8 +928,6 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         y_fake = self._discriminator(fake_cat)
                         y_real = self._discriminator(real_cat)
                         loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
-
-                        # tp, fn, tn, fp = self.split_groups(y_real, y_fake, real_cat, fake_cat)
                         
                         # for logging purpose
                         loss_d_base = loss_d
@@ -836,7 +950,8 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         pen = self._discriminator.calc_gradient_penalty(
                             real_cat, fake_cat, self._device, self.pac)
 
-                        if i > 0 and i % 50 == 0 and id_ == 0 and n == 0:
+                        # ── SHAP update (every focus_update_interval epochs) ───
+                        if i > 0 and i % self.focus_update_interval == 0 and id_ == 0 and n == 0:
                             tp, fn, tn, fp = self._discriminator.calc_shap_importance(
                                 y_real, y_fake, real_cat, fake_cat, self._transformer, device=self._device
                             )
@@ -845,6 +960,23 @@ class DPCGANSynthesizer(BaseSynthesizer):
                                 for info in self._transformer._column_transform_info_list
                             ]
                             self._log_shap(writer, tp, fn, tn, fp, column_names, epoch=i)
+
+                            # ── Update generator focus signal from TN SHAP ────
+                            if tn is not None and self.focus_threshold is not None:
+                                self._update_focus_signal(tn, threshold=self.focus_threshold)
+                                # Log focus signal to TensorBoard
+                                if self._focus_col_signal is not None:
+                                    focus_dict = {
+                                        column_names[j]: float(self._focus_col_signal[j])
+                                        for j in range(min(len(column_names),
+                                                          self._focus_col_signal.shape[0]))
+                                    }
+                                    writer.add_scalars("focus/column_weights", focus_dict, i)
+                                    writer.add_scalar(
+                                        "focus/n_active_features",
+                                        float((self._focus_signal > 0).sum()),
+                                        i
+                                    )
 
                         optimizerD.zero_grad()
                         # https://machinelearningmastery.com/how-to-implement-wasserstein-loss-for-generative-adversarial-networks/
@@ -899,7 +1031,11 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         gen_data_time = time.time() - gen_data_start
                         gen_forward_start = time.time()
 
-                    fake = self._generator(fakez)
+                    # ── Append focus signal to generator input (G update step) ─
+                    focus_batch = self._get_focus_batch(self._batch_size)
+                    fakez_with_focus = torch.cat([fakez, focus_batch], dim=1)
+
+                    fake = self._generator(fakez_with_focus)
                     fakeact = self._apply_activate(fake)
 
                     if c_pair_1 is not None:
@@ -1107,7 +1243,11 @@ class DPCGANSynthesizer(BaseSynthesizer):
                 c1 = torch.from_numpy(c1).to(self._device)
                 fakez = torch.cat([fakez, c1], dim=1)
 
-            fake = self._generator(fakez)
+            # ── Append focus signal at sample time too ─────────────────────────
+            focus_batch = self._get_focus_batch(self._batch_size)
+            fakez_with_focus = torch.cat([fakez, focus_batch], dim=1)
+
+            fake = self._generator(fakez_with_focus)
             fakeact = self._apply_activate(fake)
             data.append(fakeact.detach().cpu().numpy())
 
@@ -1120,6 +1260,8 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self._device = device
         if self._generator is not None:
             self._generator.to(self._device)
+        if self._focus_signal is not None:
+            self._focus_signal = self._focus_signal.to(self._device)
 
 
     def xai_discriminator(self, data_samples):

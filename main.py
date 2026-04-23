@@ -57,7 +57,7 @@ def assert_no_patient_leakage(train_df, test_df, group_col):
     assert len(overlap) == 0, f"Patient leakage detected! Overlap size: {len(overlap)}"
 
 
-def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital_death", group_col="subject_id", save_folds=True, config=None, exp_name="baseline", generated_model_path="output/generators", syn_path="output/synthetic_data", evaluation_path="output/evaluation"):
+def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital_death", group_col="subject_id", save_folds=True, config=None, exp_name="baseline", generated_model_path="output/generators", syn_path="output/synthetic_data", evaluation_path="output/evaluation", skip_fold=[]):
     if real_data is not None:
         # 1) Train/Test 75/25, stratified + grouped
         train_data, test_data = make_group_stratified_train_test(
@@ -116,6 +116,9 @@ def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital
     metadata = get_submetadata("./notebooks/icu_dka_metadata.json", train_data.columns)
     for file in train_files:
         fold_number = re.search(r"train_fold_(\d+)\.csv", file).group(1)
+        if int(fold_number) in skip_fold:
+            print(f"Fold {fold_number} skipped.")
+            continue
         tabular_data = pd.read_csv(file).drop(columns=["subject_id", "sofa"])
         validation = pd.read_csv(os.path.join(folds_dir, f"val_fold_{fold_number}.csv")).drop(columns=["subject_id", "sofa"])
         print(f"----- Training fold {fold_number} with {len(tabular_data)} rows. -----")
@@ -132,7 +135,7 @@ def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital
         syn_data_util = postprocessing.postprocess_for_utility(syn_data)
         ExperimentRunner().run_experiment(
             train_data=syn_data_util, 
-            test_data=test_data,
+            test_data=validation,
             out_dir=f"{evaluation_path}/{exp_name}/fold_{fold_number}",
             exp_name=exp_name,
         )
@@ -154,13 +157,13 @@ if __name__ == "__main__":
     syn_path = f'{output_dir}/synthetic_data'
     os.makedirs(syn_path, exist_ok=True)
     config = DPCGANConfig(
-        epochs=5,
+        epochs=2000,
         batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
-        generator_dim=(128, 128, 128),
-        discriminator_dim=(128, 128, 128),
+        generator_dim=(256, 256, 256),
+        discriminator_dim=(256, 256, 256),
         generator_lr=2e-5,
         discriminator_lr=2e-5,
-        discriminator_steps=10,
+        discriminator_steps=5,
         private=False,
         xai_type=None,
         xai_weight=0,
@@ -169,4 +172,4 @@ if __name__ == "__main__":
     exp_name = "baseline"
 
     # main(real_data=real_data, save_folds=True)
-    main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name=exp_name, generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path)
+    main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name=exp_name, generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[1,2,5])
