@@ -143,11 +143,12 @@ def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital
     # Repeat for the final model training on the entire training set and evaluation on the test set.
 
 if __name__ == "__main__":
-    real_data = pd.read_csv(os.path.join(RESOURCE_FOLDER, "icu_dka_dataset_20260415.csv"))
+    # real_data = pd.read_csv(os.path.join(RESOURCE_FOLDER, "icu_dka_dataset_20260415.csv"))
     train_data = pd.read_csv(os.path.join(RESOURCE_FOLDER, "icu_dka_train_data.csv"))
     test_data = pd.read_csv(os.path.join(RESOURCE_FOLDER, "icu_dka_test_data.csv"))
 
-    output_dir = "output"
+
+    output_dir = "dp_cgans/tests/output"
     generated_model_path = f'{output_dir}/generators'
     os.makedirs(generated_model_path, exist_ok=True)
     transformers_path = f'{output_dir}/transformer'
@@ -156,8 +157,9 @@ if __name__ == "__main__":
     os.makedirs(evaluation_path, exist_ok=True)
     syn_path = f'{output_dir}/synthetic_data'
     os.makedirs(syn_path, exist_ok=True)
-    config = DPCGANConfig(
-        epochs=2000,
+
+    config_3 = DPCGANConfig(
+        epochs=1500,
         batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
         generator_dim=(256, 256, 256),
         discriminator_dim=(256, 256, 256),
@@ -168,8 +170,38 @@ if __name__ == "__main__":
         xai_type=None,
         xai_weight=0,
         saved_transformer=transformers_path+'/fitted_transformer.pkl'
+    )    
+    config_4 = DPCGANConfig(
+        epochs=2000,
+        batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
+        generator_dim=(256, 256, 256),
+        discriminator_dim=(256, 256, 256),
+        generator_lr=2e-5,
+        discriminator_lr=2e-5,
+        discriminator_steps=10,
+        private=False,
+        xai_type=None,
+        xai_weight=0,
+        saved_transformer=transformers_path+'/fitted_transformer.pkl'
     )
-    exp_name = "baseline"
+    config_5 = DPCGANConfig(
+        epochs=2000,
+        batch_size=30, # ~6% of 1086 (64) and ~6% of 1711 (100)
+        generator_dim=(256, 256, 256),
+        discriminator_dim=(256, 256, 256),
+        generator_lr=2e-5,
+        discriminator_lr=2e-5,
+        discriminator_steps=5,
+        private=False,
+        xai_type=None,
+        xai_weight=0,
+        saved_transformer=transformers_path+'/fitted_transformer.pkl'
+    )
 
     # main(real_data=real_data, save_folds=True)
-    main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name=exp_name, generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[1,2,5])
+    main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config_3, exp_name="config_3_e_1500", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[])
+    # epochs = [1000,3000,1500,2500]
+    # for e in epochs: 
+    #     config_4.epochs = e
+    #     main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config_4, exp_name=f"config_4_e_{e}", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[1,2,4,5])
+
