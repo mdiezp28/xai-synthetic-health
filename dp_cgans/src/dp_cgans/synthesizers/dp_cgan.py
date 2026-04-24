@@ -128,22 +128,31 @@ class Discriminator(Module):
         return real_high_mask, real_low_mask, fake_low_mask, fake_high_mask
     
     def calc_shap_importance(self, y_real, y_fake, real_data, fake_data, transformer, device='cpu'):
-        shap_batch_size = real_data.size(0) 
+        shap_batch_size = real_data.size(0)
         was_training = self.training
         self.eval()
         real_data = real_data.detach()
         fake_data = fake_data.detach()
-        full_data = torch.cat([real_data, fake_data], dim=0)  
-        # build masks
-        real_high_mask, real_low_mask, fake_low_mask, fake_high_mask = self.split_groups(y_real, y_fake, real_data, fake_data)
-        # print mix and max in y_real and y_fake to verify thresholding
-        print("y_real min:", y_real.min().item())
-        print("y_real max:", y_real.max().item())
-        print("y_fake min:", y_fake.min().item())
-        print("y_fake max:", y_fake.max().item())
+
         try:
             self.enable_rowwise(True)
 
+            with torch.no_grad():
+                y_real_row = self(real_data).view(-1)   # [B]
+                y_fake_row = self(fake_data).view(-1)   # [B]
+
+            # Threshold on per-sample scores
+            threshold = y_real_row.mean()
+            real_high_mask = (y_real_row > threshold)[:real_data.shape[0]]
+            real_low_mask  = (y_real_row <= threshold)[:real_data.shape[0]]
+            fake_low_mask  = (y_fake_row <= threshold)[:fake_data.shape[0]]
+            fake_high_mask = (y_fake_row > threshold)[:fake_data.shape[0]]
+
+            print(f"\nthreshold (real mean): {threshold.item():.3f}")
+            print(f"y_real_row min={y_real_row.min():.3f} max={y_real_row.max():.3f}")
+            print(f"y_fake_row min={y_fake_row.min():.3f} max={y_fake_row.max():.3f}")
+
+            full_data = torch.cat([real_data, fake_data], dim=0)
             background_size = min(150, real_data.size(0))
             shap_background = real_data[:background_size]
         
@@ -414,7 +423,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                  log_frequency=True, verbose=False, epochs=300, pac=10, cuda=True, private=False,
                  wandb=False, xai=None, xai_weight=0, ontology=None,
                  saved_transformer=os.getcwd()+'/fitted_transformer.pkl',
-                 focus_threshold: float = -0.1,
+                 focus_threshold: float = -0.01,
                  focus_update_interval: int = 50):
 
         assert batch_size % 2 == 0
@@ -1187,7 +1196,44 @@ class DPCGANSynthesizer(BaseSynthesizer):
                     ######## ADDED ########
                 if self.wandb == True:
                     wandb.finish()
+                if i % 25 == 0:
+                    with torch.no_grad():
+                        z1 = torch.normal(mean=mean, std=std).to(self._device)
+                        z2 = torch.normal(mean=mean, std=std).to(self._device)
 
+                        focus_batch = self._get_focus_batch(self._batch_size)
+                        c = c_pair_1.detach() if c_pair_1 is not None else None
+
+                        if c is not None:
+                            input1 = torch.cat([z1, c, focus_batch], dim=1)
+                            input2 = torch.cat([z2, c, focus_batch], dim=1)
+                        else:
+                            input1 = torch.cat([z1, focus_batch], dim=1)
+                            input2 = torch.cat([z2, focus_batch], dim=1)
+
+                        out1 = self._generator(input1)
+                        out2 = self._generator(input2)
+
+                        diff = torch.mean(torch.abs(out1 - out2)) / (torch.mean(torch.abs(out1)) + 1e-8)
+                        # print("Noise sensitivity:", diff)
+                        z = torch.normal(mean=mean, std=std).to(self._device)
+
+                        f1 = focus_batch  
+                        f2 = torch.zeros_like(f1)
+
+                        if c is not None:
+                            out_focus = self._generator(torch.cat([z, c, f1], dim=1))
+                            out_nofocus = self._generator(torch.cat([z, c, f2], dim=1))
+                        else:
+                            out_focus = self._generator(torch.cat([z, f1], dim=1))
+                            out_nofocus = self._generator(torch.cat([z, f2], dim=1))
+
+                        diff_focus = torch.mean(torch.abs(out_focus - out_nofocus)) / (torch.mean(torch.abs(out_focus)) + 1e-8)
+                        # print("Focus sensitivity:", diff_focus)
+                        writer.add_scalar("sensitivity/noise", diff, i)
+                        writer.add_scalar("sensitivity/focus", diff_focus, i)
+                        writer.add_scalar("sensitivity/ratio", diff_focus / (diff + 1e-8), i)
+                        writer.add_scalar("focus/norm", self._focus_signal.norm(), i)
 
             # Stop the prefetcher after training (if enabled)
             if prefetcher:
