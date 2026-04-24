@@ -108,11 +108,15 @@ class Discriminator(Module):
         print("median:", torch.median(torch.cat([y_real, y_fake])).item())
 
         # Expand masks to match real_cat / fake_cat
+        real_high_mask = (y_real > threshold).repeat_interleave(pac)
+        real_low_mask  = (y_real <= threshold).repeat_interleave(pac)
+        fake_high_mask = (y_fake > threshold).repeat_interleave(pac)
+        fake_low_mask  = (y_fake <= threshold).repeat_interleave(pac)
         # Ensure masks are the same length as real_cat / fake_cat
-        real_high_mask = (y_real > threshold)[:real_cat.shape[0]]
-        real_low_mask = (y_real <= threshold)[:real_cat.shape[0]]
-        fake_high_mask = (y_fake > threshold)[:fake_cat.shape[0]]
-        fake_low_mask = (y_fake <= threshold)[:fake_cat.shape[0]]
+        real_high_mask = real_high_mask[:real_cat.shape[0]]
+        real_low_mask  = real_low_mask[:real_cat.shape[0]]
+        fake_high_mask = fake_high_mask[:fake_cat.shape[0]]
+        fake_low_mask  = fake_low_mask[:fake_cat.shape[0]]
 
 
         # real_high = real_cat[real_high_mask]

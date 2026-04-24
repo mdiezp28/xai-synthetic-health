@@ -9,7 +9,6 @@ from syn_data_evaluation.experiments.run_fidelity import get_submetadata
 from syn_data_evaluation.experiments.run_utility import ExperimentRunner
 from tests.run_dp_cgans import DPCGANConfig, run_dp_cgans
 
-RESOURCE_FOLDER = "./dp_cgans/resources/"
 
 def make_group_stratified_train_test(df, label_col, group_col, test_size=0.25, random_state=42):
     """
@@ -126,7 +125,7 @@ def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital
         # Evaluate Fidelity
         print(f"Evaluating fidelity for fold {fold_number}... - Model: {model_name}")
         syn_data_fi = postprocessing.postprocess_for_fidelity(syn_data)
-        results = run_simple_evaluation(
+        run_simple_evaluation(
             tabular_data, syn_data_fi, metadata,
             experiment_name=f"{exp_name}_fold_{fold_number}",
             results_csv=os.path.join(evaluation_path, 'fidelity_results.csv')
@@ -141,6 +140,28 @@ def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital
         )
 
     # Repeat for the final model training on the entire training set and evaluation on the test set.
+    if False:
+        print(f"----- Run final model with {len(train_data)} rows. -----")
+        model_name, syn_data =run_dp_cgans(train_data, f"{syn_path}/syn_data.csv", generated_model_path, config, save_output=True)
+        # Evaluate Fidelity
+        print(f"Evaluating fidelity - Model: {model_name}")
+        syn_data_fi = postprocessing.postprocess_for_fidelity(syn_data)
+        run_simple_evaluation(
+            train_data, syn_data_fi, metadata,
+            experiment_name=f"{exp_name}_final",
+            results_csv=os.path.join(evaluation_path, 'fidelity_results.csv')
+        )
+        # Evaluate Utility - for now, run only experiment 1
+        syn_data_util = postprocessing.postprocess_for_utility(syn_data)
+        ExperimentRunner().run_experiment(
+            train_data=syn_data_util, 
+            test_data=test_data,
+            out_dir=f"{evaluation_path}/{exp_name}/final",
+            exp_name=exp_name,
+        )
+
+
+RESOURCE_FOLDER = "./dp_cgans/resources/"
 
 if __name__ == "__main__":
     # real_data = pd.read_csv(os.path.join(RESOURCE_FOLDER, "icu_dka_dataset_20260415.csv"))
@@ -158,8 +179,8 @@ if __name__ == "__main__":
     syn_path = f'{output_dir}/synthetic_data'
     os.makedirs(syn_path, exist_ok=True)
 
-    config_3 = DPCGANConfig(
-        epochs=1500,
+    config = DPCGANConfig(
+        epochs=2000,
         batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
         generator_dim=(256, 256, 256),
         discriminator_dim=(256, 256, 256),
@@ -171,37 +192,5 @@ if __name__ == "__main__":
         xai_weight=0,
         saved_transformer=transformers_path+'/fitted_transformer.pkl'
     )    
-    config_4 = DPCGANConfig(
-        epochs=2000,
-        batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
-        generator_dim=(256, 256, 256),
-        discriminator_dim=(256, 256, 256),
-        generator_lr=2e-5,
-        discriminator_lr=2e-5,
-        discriminator_steps=10,
-        private=False,
-        xai_type=None,
-        xai_weight=0,
-        saved_transformer=transformers_path+'/fitted_transformer.pkl'
-    )
-    config_5 = DPCGANConfig(
-        epochs=2000,
-        batch_size=30, # ~6% of 1086 (64) and ~6% of 1711 (100)
-        generator_dim=(256, 256, 256),
-        discriminator_dim=(256, 256, 256),
-        generator_lr=2e-5,
-        discriminator_lr=2e-5,
-        discriminator_steps=5,
-        private=False,
-        xai_type=None,
-        xai_weight=0,
-        saved_transformer=transformers_path+'/fitted_transformer.pkl'
-    )
-
-    # main(real_data=real_data, save_folds=True)
-    main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config_3, exp_name="config_3_e_1500", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[])
-    # epochs = [1000,3000,1500,2500]
-    # for e in epochs: 
-    #     config_4.epochs = e
-    #     main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config_4, exp_name=f"config_4_e_{e}", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[1,2,4,5])
+    main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name="config", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[])
 
