@@ -448,7 +448,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self.saved_transformer = saved_transformer
 
         # ── Focus-signal hyper-parameters ──────────────────────────────────────
-        self.focus_threshold = focus_threshold                # 0 - disabled
+        self.focus_threshold = focus_threshold                # None - disabled
         self.focus_update_interval = focus_update_interval    # epochs between SHAP refreshes
         self.focus_target_ratio = focus_target_ratio
 
