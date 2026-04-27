@@ -188,8 +188,8 @@ if __name__ == "__main__":
         discriminator_lr=2e-5,
         discriminator_steps=5,
         private=False,
-        xai_type=None,
-        xai_weight=0,
+        focus_update_interval=5,
+        focus_target_ratio=0.5, # low 0.1, medium 0.3, high 0.5
         saved_transformer=transformers_path+'/fitted_transformer.pkl'
     )    
     main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name="config", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[])

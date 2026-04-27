@@ -421,10 +421,8 @@ class DPCGANSynthesizer(BaseSynthesizer):
                  generator_lr=2e-4, generator_decay=1e-6, discriminator_lr=2e-4,
                  discriminator_decay=1e-6, batch_size=500, discriminator_steps=1,
                  log_frequency=True, verbose=False, epochs=300, pac=10, cuda=True, private=False,
-                 wandb=False, xai=None, xai_weight=0, ontology=None,
-                 saved_transformer=os.getcwd()+'/fitted_transformer.pkl',
-                 focus_threshold: float = -0.01,
-                 focus_update_interval: int = 50):
+                 wandb=False, ontology=None, saved_transformer=os.getcwd()+'/fitted_transformer.pkl',
+                 focus_threshold: float = -0.01, focus_update_interval: int = 50, focus_target_ratio: float = 0.0):
 
         assert batch_size % 2 == 0
 
@@ -448,12 +446,11 @@ class DPCGANSynthesizer(BaseSynthesizer):
         self.ontology = ontology
         self.wandb = wandb
         self.saved_transformer = saved_transformer
-        self.xai = xai
-        self.xai_weight = xai_weight
 
         # ── Focus-signal hyper-parameters ──────────────────────────────────────
         self.focus_threshold = focus_threshold                # 0 - disabled
         self.focus_update_interval = focus_update_interval    # epochs between SHAP refreshes
+        self.focus_target_ratio = focus_target_ratio
 
         if not cuda or not torch.cuda.is_available():
             device = 'cpu'
@@ -544,14 +541,13 @@ class DPCGANSynthesizer(BaseSynthesizer):
             return torch.empty(batch_size, 0, device=self._device)
 
         focus = self._focus_signal
-        if noise is not None and self.xai_weight > 0:
+        if noise is not None and self.focus_target_ratio > 0:
             noise_norm = noise.norm(dim=1).mean().detach()
             focus_norm = focus.norm().detach()
-
-            scale = (self.xai_weight * noise_norm) / (focus_norm + 1e-8)
-            scale = torch.clamp(scale, 0.1, 5.0)
-
-            focus = scale * focus
+            if focus_norm > 1e-8: 
+                scale = (self.focus_target_ratio * noise_norm) / focus_norm 
+                scale = torch.clamp(scale, 0.1, 5.0)
+                focus = scale * focus
 
         return focus.unsqueeze(0).expand(batch_size, -1)   # [B, data_dim]
 
@@ -806,7 +802,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
         # TensorBoard
         run_id = time.strftime("%d-%mT%H.%M.%S")
-        log_dir = f"runs/e{self._epochs}_bs{self._batch_size}_xai{self.xai}_beta{self.xai_weight}_{run_id}"
+        log_dir = f"runs/e{self._epochs}_bs{self._batch_size}_target{self.focus_target_ratio}_{run_id}"
         writer = SummaryWriter(log_dir=log_dir)
                 
         run_lines = [
@@ -825,10 +821,9 @@ class DPCGANSynthesizer(BaseSynthesizer):
             f"Disc LR/Decay: {self._discriminator_lr}/{self._discriminator_decay}",
             f"Log Frequency: {self._log_frequency}",
             f"Private: {self.private}",
-            f"XAI: {self.xai}",
-            f"XAI Weight: {self.xai_weight}",
             f"Focus threshold: {self.focus_threshold}",
             f"Focus update interval: {self.focus_update_interval}",
+            f"Focus target ratio: {self.focus_target_ratio}",
         ]
         running_details = "\n".join(run_lines)
         writer.add_text("run_summary", f"<pre>{running_details}</pre>", 0)
@@ -900,6 +895,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                             data_start = time.time()
 
                         fakez = torch.normal(mean=mean, std=std).to(self._device)
+                        pure_noise = fakez.clone() 
 
                         # Direct sampling (prefetcher disabled)
                         prefetch_result = prefetcher.get() if prefetcher else None
@@ -935,7 +931,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                             forward_start = time.time()
 
                         # ── Append focus signal to generator input ─────────────
-                        focus_batch = self._get_focus_batch(self._batch_size, fakez)  # [B, data_dim] or [B, 0]
+                        focus_batch = self._get_focus_batch(self._batch_size, pure_noise)  # [B, data_dim] or [B, 0]
                         fakez_with_focus = torch.cat([fakez, focus_batch], dim=1)
 
                         fake = self._generator(fakez_with_focus)
@@ -990,17 +986,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                                 self._update_focus_signal(tn, threshold=self.focus_threshold)
                                 # Log focus signal to TensorBoard
                                 if self._focus_col_signal is not None:
-                                    focus_dict = {
-                                        column_names[j]: float(self._focus_col_signal[j])
-                                        for j in range(min(len(column_names),
-                                                          self._focus_col_signal.shape[0]))
-                                    }
-                                    writer.add_scalars("focus/column_weights", focus_dict, i)
-                                    writer.add_scalar(
-                                        "focus/n_active_features",
-                                        float((self._focus_signal > 0).sum()),
-                                        i
-                                    )
+                                    writer.add_scalar("focus/norm", float(self._focus_signal.norm()), i)
 
                         optimizerD.zero_grad()
                         # https://machinelearningmastery.com/how-to-implement-wasserstein-loss-for-generative-adversarial-networks/
@@ -1033,6 +1019,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         gen_data_start = time.time()
 
                     fakez = torch.normal(mean=mean, std=std).to(self._device)
+                    pure_noise = fakez.clone()
 
                     # Direct sampling (prefetcher disabled)
                     prefetch_result = prefetcher.get() if prefetcher else None
@@ -1056,7 +1043,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         gen_forward_start = time.time()
 
                     # ── Append focus signal to generator input (G update step) ─
-                    focus_batch = self._get_focus_batch(self._batch_size, fakez)
+                    focus_batch = self._get_focus_batch(self._batch_size, pure_noise)
                     fakez_with_focus = torch.cat([fakez, focus_batch], dim=1)
 
                     fake = self._generator(fakez_with_focus)
@@ -1211,42 +1198,37 @@ class DPCGANSynthesizer(BaseSynthesizer):
                     with torch.no_grad():
                         z1 = torch.normal(mean=mean, std=std).to(self._device)
                         z2 = torch.normal(mean=mean, std=std).to(self._device)
+                        c  = c_pair_1.detach() if c_pair_1 is not None else None
 
-                        focus_batch1 = self._get_focus_batch(self._batch_size, z1)
-                        focus_batch2 = self._get_focus_batch(self._batch_size, z2)
-                        c = c_pair_1.detach() if c_pair_1 is not None else None
+                        f1 = self._get_focus_batch(self._batch_size, z1)
+                        f2 = self._get_focus_batch(self._batch_size, z2)
 
-                        if c is not None:
-                            input1 = torch.cat([z1, c, focus_batch1], dim=1)
-                            input2 = torch.cat([z2, c, focus_batch2], dim=1)
-                        else:
-                            input1 = torch.cat([z1, focus_batch1], dim=1)
-                            input2 = torch.cat([z2, focus_batch2], dim=1)
+                        def make_input(z, f):
+                            parts = [z]
+                            if c is not None:
+                                parts.append(c)
+                            parts.append(f)
+                            return torch.cat(parts, dim=1)
 
-                        out1 = self._generator(input1)
-                        out2 = self._generator(input2)
+                        # Noise sensitivity: two different noises, same focus
+                        f_fixed = self._get_focus_batch(self._batch_size, z1)
+                        out1 = self._generator(make_input(z1, f_fixed))
+                        out2 = self._generator(make_input(z2, f_fixed))
+                        noise_sens = torch.mean(torch.abs(out1 - out2)) / (
+                                    torch.mean(torch.abs(out1)) + 1e-8)
 
-                        diff = torch.mean(torch.abs(out1 - out2)) / (torch.mean(torch.abs(out1)) + 1e-8)
-                        # print("Noise sensitivity:", diff)
-                        z = torch.normal(mean=mean, std=std).to(self._device)
+                        # Focus sensitivity: same noise, focus vs no-focus
+                        z    = torch.normal(mean=mean, std=std).to(self._device)
+                        f_on = self._get_focus_batch(self._batch_size, z)
+                        f_off = torch.zeros_like(f_on)
+                        out_focus   = self._generator(make_input(z, f_on))
+                        out_nofocus = self._generator(make_input(z, f_off))
+                        focus_sens  = torch.mean(torch.abs(out_focus - out_nofocus)) / (
+                                    torch.mean(torch.abs(out_focus)) + 1e-8)
 
-                        f1 = self._get_focus_batch(self._batch_size, z)
-                        f2 = torch.zeros_like(f1)
-
-                        if c is not None:
-                            out_focus = self._generator(torch.cat([z, c, f1], dim=1))
-                            out_nofocus = self._generator(torch.cat([z, c, f2], dim=1))
-                        else:
-                            out_focus = self._generator(torch.cat([z, f1], dim=1))
-                            out_nofocus = self._generator(torch.cat([z, f2], dim=1))
-
-                        diff_focus = torch.mean(torch.abs(out_focus - out_nofocus)) / (torch.mean(torch.abs(out_focus)) + 1e-8)
-                        # print("Focus sensitivity:", diff_focus)
-                        writer.add_scalar("sensitivity/noise", diff, i)
-                        writer.add_scalar("sensitivity/focus", diff_focus, i)
-                        writer.add_scalar("sensitivity/ratio", diff_focus / (diff + 1e-8), i)
-                        if self._focus_signal is not None:
-                            writer.add_scalar("focus/norm", self._focus_signal.norm(), i)
+                        writer.add_scalar("sensitivity/noise",  noise_sens, i)
+                        writer.add_scalar("sensitivity/focus",  focus_sens, i)
+                        writer.add_scalar("sensitivity/ratio",  focus_sens / (noise_sens + 1e-8), i)
 
             # Stop the prefetcher after training (if enabled)
             if prefetcher:
@@ -1293,6 +1275,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
             mean = torch.zeros(self._batch_size, self._embedding_dim, device=self._device)
             std = mean + 1
             fakez = torch.normal(mean=mean, std=std)
+            pure_noise = fakez.clone()
 
             if global_condition_vec is not None:
                 condvec = global_condition_vec.copy()
@@ -1307,7 +1290,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
                 fakez = torch.cat([fakez, c1], dim=1)
 
             # ── Append focus signal at sample time too ─────────────────────────
-            focus_batch = self._get_focus_batch(self._batch_size, fakez)
+            focus_batch = self._get_focus_batch(self._batch_size, pure_noise)  # [B, data_dim] or [B, 0]
             fakez_with_focus = torch.cat([fakez, focus_batch], dim=1)
 
             fake = self._generator(fakez_with_focus)
@@ -1411,7 +1394,6 @@ class DPCGANSynthesizer(BaseSynthesizer):
         sorted_names = [column_names[o] for o in sort_order]
 
         self._log_shap_heatmap(writer, groups, sort_order, sorted_names, epoch)
-        self._log_shap_scalars(writer, groups, column_names, epoch)
 
     def _log_shap_heatmap(self, writer, groups, sort_order, sorted_names, epoch):
         fig, axes = plt.subplots(4, 1, figsize=(60, 16), dpi=100)
@@ -1469,16 +1451,3 @@ class DPCGANSynthesizer(BaseSynthesizer):
         writer.add_image("SHAP/heatmap_by_group", img_tensor, epoch)
         buf.close()
         plt.close(fig)
-
-
-    def _log_shap_scalars(self, writer, groups, column_names, epoch):
-        if self._tracked_features_idx is None and groups["TN"] is not None:
-            self._tracked_features_idx = np.argsort(groups["TN"])[:10]  # 10 most negative TN features
-
-        if self._tracked_features_idx is not None:
-            for tag, arr in groups.items():
-                writer.add_scalars(
-                    f"feature_importance/{tag}",
-                    self._build_dict(arr, self._tracked_features_idx, column_names),
-                    epoch
-                )
