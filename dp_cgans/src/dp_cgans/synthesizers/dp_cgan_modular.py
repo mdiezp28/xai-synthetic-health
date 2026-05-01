@@ -78,7 +78,7 @@ class DP_CGAN(DPCGANModel):
                  log_frequency=True, verbose=False, epochs=300, pac=10, cuda=True, 
                  rounding='auto', min_value='auto', max_value='auto', private=False,
                  wandb=False, ontology=None, saved_transformer=None,
-                 focus_threshold=-0.01, focus_update_interval=50, focus_target_ratio=0.0):
+                 focus_k_features=0, focus_update_interval=50, xai_weight=0):
         super().__init__(
             field_names=field_names,
             primary_key=primary_key,
@@ -111,9 +111,9 @@ class DP_CGAN(DPCGANModel):
             'wandb' : wandb,
             'ontology': ontology,
             'saved_transformer': saved_transformer,
-            'focus_threshold': focus_threshold,
+            'focus_k_features': focus_k_features,
             'focus_update_interval': focus_update_interval,
-            'focus_target_ratio': focus_target_ratio
+            'xai_weight': xai_weight
 
         }
 

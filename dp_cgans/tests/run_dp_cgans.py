@@ -10,7 +10,7 @@ class DPCGANConfig:
                  discriminator_dim=(128, 128, 128), generator_lr=5e-5, 
                  discriminator_lr=5e-5, discriminator_steps=5, private=False,
                  saved_transformer=os.getcwd()+'/fitted_transformer.pkl', pac=10, 
-                 focus_threshold=-0.01, focus_update_interval=50, focus_target_ratio=0.0):
+                 focus_k_features=0, focus_update_interval=50, xai_weight=0.0):
         self.epochs = epochs
         self.batch_size = batch_size
         self.generator_dim = generator_dim
@@ -21,9 +21,9 @@ class DPCGANConfig:
         self.private = private
         self.saved_transformer = saved_transformer
         self.pac = pac
-        self.focus_threshold = focus_threshold
+        self.focus_k_features = focus_k_features
         self.focus_update_interval = focus_update_interval
-        self.focus_target_ratio = focus_target_ratio
+        self.xai_weight = xai_weight
 
 def run_dp_cgans(tabular_data, output_file, generated_model_path, config= None, save_output=False):
     print(f'Testing DP_CGAN')
@@ -41,9 +41,9 @@ def run_dp_cgans(tabular_data, output_file, generated_model_path, config= None, 
         discriminator_lr=config.discriminator_lr,
         discriminator_steps=config.discriminator_steps,
         private=False,
-        focus_threshold=config.focus_threshold,
+        focus_k_features=config.focus_k_features,
         focus_update_interval=config.focus_update_interval,
-        focus_target_ratio=config.focus_target_ratio,
+        xai_weight=config.xai_weight,
         saved_transformer=config.saved_transformer,
         # dataset_name=config.dataset_name,
         pac=config.pac
