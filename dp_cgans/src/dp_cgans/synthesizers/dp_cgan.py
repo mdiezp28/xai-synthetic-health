@@ -466,21 +466,28 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
         selected_values, selected_indices = torch.topk(I_tn_cpu, k=k_features, largest=False)
 
+        # Keep only features with negative SHAP — discard any that are >= 0
+        negative_mask = selected_values < 0
+        selected_values  = selected_values[negative_mask]
+        selected_indices = selected_indices[negative_mask]
+
         new_signal = torch.zeros(data_dim, device=self._device)
         col_signal = torch.zeros(I_tn_cpu.shape[0], device=self._device)
-        
-        # Soft weights: normalise magnitudes so lowest = 1.0
-        magnitudes = selected_values.abs()
-        soft_weights = magnitudes / magnitudes.max()
-        for rank, col_idx in enumerate(selected_indices.tolist()):
-            if col_idx < len(groups):
-                sl = groups[col_idx]
-                new_signal[sl] = float(soft_weights[rank])
-                col_signal[col_idx] = float(soft_weights[rank])
+        if selected_indices.numel() == 0:
+            print(f"[features focus] No features with negative SHAP values found. Focus signal not updated.")
+        else:
+            # Soft weights: normalise magnitudes so lowest = 1.0
+            magnitudes = selected_values.abs()
+            soft_weights = magnitudes / magnitudes.max()
+            for rank, col_idx in enumerate(selected_indices.tolist()):
+                if col_idx < len(groups):
+                    sl = groups[col_idx]
+                    new_signal[sl] = float(soft_weights[rank])
+                    col_signal[col_idx] = float(soft_weights[rank])
 
-        print(f"[focus] Updated focus signal: "
-        f"{selected_indices.tolist()}  "
-        f"(values: {[f'{v:.3f}' for v in selected_values.tolist()]})")
+            print(f"[features focus] Updated focus signal:  {selected_indices.numel()} "
+            f"{selected_indices.tolist()}  "
+            f"(values: {[f'{v:.3f}' for v in selected_values.tolist()]})")
 
         # EMA smoothing
         ema_alpha = 0.7
@@ -1160,14 +1167,14 @@ class DPCGANSynthesizer(BaseSynthesizer):
                             parts.append(f)
                             return torch.cat(parts, dim=1)
 
-                        # Noise sensitivity: two different noises, same focus
+                        # Noise: two different noises, same focus
                         f_fixed = self._get_focus_batch(self._batch_size)
                         out1 = self._generator(make_input(z1, f_fixed))
                         out2 = self._generator(make_input(z2, f_fixed))
                         noise_sens = torch.mean(torch.abs(out1 - out2)) / (
                                     torch.mean(torch.abs(out1)) + 1e-8)
 
-                        # Focus sensitivity: same noise, focus vs no-focus
+                        # Focus: same noise, focus vs no-focus
                         z    = torch.normal(mean=mean, std=std).to(self._device)
                         f_on = self._get_focus_batch(self._batch_size)
                         f_off = torch.zeros_like(f_on)
@@ -1176,9 +1183,9 @@ class DPCGANSynthesizer(BaseSynthesizer):
                         focus_sens  = torch.mean(torch.abs(out_focus - out_nofocus)) / (
                                     torch.mean(torch.abs(out_focus)) + 1e-8)
 
-                        writer.add_scalar("sensitivity/noise",  noise_sens, i)
-                        writer.add_scalar("sensitivity/focus",  focus_sens, i)
-                        writer.add_scalar("sensitivity/ratio",  focus_sens / (noise_sens + 1e-8), i)
+                        writer.add_scalar("effect/noise",  noise_sens, i)
+                        writer.add_scalar("effect/focus",  focus_sens, i)
+                        writer.add_scalar("effect/ratio",  focus_sens / (noise_sens + 1e-8), i)
 
             # Stop the prefetcher after training (if enabled)
             if prefetcher:
