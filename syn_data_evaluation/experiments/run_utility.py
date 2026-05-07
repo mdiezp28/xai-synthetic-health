@@ -250,11 +250,11 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
         )
         
         print("\n" + "="*80)
-        print("Experiment 2: \n Training data: Hybrid data.\n Test data: real test data.")
+        print("Experiment 2.1: \n Training data: Hybrid data.\n Test data: real test data.")
         print("="*80 + "\n")
 
         for perc in percentages:
-            exp_name = f"exp2_{int(perc*100)}perc_{data_name}"
+            exp_name = f"exp2.1_{int(perc*100)}perc_{data_name}"
             if fold_num == 0:
                 out_dir = result_path+exp_name+"/"
             else:
@@ -276,11 +276,11 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
             )
 
         print("\n" + "="*80)
-        print("Experiment 3: \n Training data: Hybrid data - Augmentation.\n Test data: real test data.")
+        print("Experiment 3.1: \n Training data: Hybrid data - Augmentation.\n Test data: real test data.")
         print("="*80 + "\n")
 
         for perc in percentages:
-            exp_name = f"exp3_{int(perc*100)}perc_{data_name}"
+            exp_name = f"exp3.1_{int(perc*100)}perc_{data_name}"
             if fold_num == 0:
                 out_dir = result_path+exp_name+"/"
             else:
@@ -303,11 +303,11 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
 
 
     print("\n" + "="*80)
-    print("Experiment 4: \n Training data: Hybrid data. Random selection.\n Test data: real test data.")
+    print("Experiment 2.2: \n Training data: Hybrid data. Random selection.\n Test data: real test data.")
     print("="*80 + "\n")
 
     for perc in percentages:
-        exp_name = f"exp4_{int(perc*100)}perc_{data_name}"
+        exp_name = f"exp2.2_{int(perc*100)}perc_{data_name}"
         if fold_num == 0:
             out_dir = result_path+exp_name+"/"
         else:
@@ -330,11 +330,11 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
         )
 
     print("\n" + "="*80)
-    print("Experiment 5: \n Training data: Hybrid data - Augmentation. Random selection.\n Test data: real test data.")
+    print("Experiment 3.2: \n Training data: Hybrid data - Augmentation. Random selection.\n Test data: real test data.")
     print("="*80 + "\n")
 
     for perc in percentages:
-        exp_name = f"exp5_{int(perc*100)}perc_{data_name}"
+        exp_name = f"exp3.2_{int(perc*100)}perc_{data_name}"
         if fold_num == 0:
             out_dir = result_path+exp_name+"/"
         else:
@@ -477,23 +477,22 @@ if __name__ == "__main__":
 
             ----- RUN SYNTHETIC FOLDS -----    
             real_pattern = f"train_fold_*.csv"
-            run_exp_syn_folds(result_path, real_fold_path, syn_fold_path, real_pattern, syn_pattern, data_name, thresholds=[0.0689, 0.1243, 0.0865, 0.1692, 0.3140]):
+            run_exp_syn_folds(result_path, real_fold_path, syn_fold_path, real_pattern, syn_pattern, data_name, thresholds=[0.0689, 0.1243, 0.0865, 0.1692, 0.3140])
         
     """
     print("Starting utility experiments...")
-    # Syn data folds
-    syn_fold_path = ""
-    # run_exp_syn_folds -> to run synthetic data folds experiment list
     experiment_list = [
         ("baseline", 'config_3_syn_data_fold_*.csv'),
-        # ("focus_conv", 'conv_syn_data_fold_*.csv'),
-        # ("focus_0.1", 'conf_0.1_syn_data_fold_*.csv'),
     ]
     for data_name, syn_data in experiment_list:
         run_exp_syn_folds(
-            syn_fold_path=syn_fold_path,
+            result_path= "", 
+            real_fold_path="",
+            syn_fold_path="",
+            real_pattern=f"train_fold_*.csv",
             syn_pattern=syn_data,
-            data_name=data_name
+            data_name=data_name,
+            thresholds=[0.0689, 0.1243, 0.0865, 0.1692, 0.3140]
         )
 
 

@@ -6,7 +6,7 @@ from sklearn.model_selection import StratifiedGroupKFold
 from syn_data_evaluation.data import postprocessing
 from syn_data_evaluation.evaluation.fidelity_evaluator import run_simple_evaluation
 from syn_data_evaluation.experiments.run_fidelity import get_submetadata
-from syn_data_evaluation.experiments.run_utility import ExperimentRunner
+from syn_data_evaluation.experiments.run_utility import ExperimentRunner, run_exp_syn_folds as run_experiment_list
 from tests.run_dp_cgans import DPCGANConfig, run_dp_cgans
 
 
@@ -162,12 +162,13 @@ def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital
 
 
 RESOURCE_FOLDER = "./dp_cgans/resources/"
+GENERATE_SYNTHETIC_DATA = True
+RUN_UTILITY_EXPERIMENTS = True
 
 if __name__ == "__main__":
     # real_data = pd.read_csv(os.path.join(RESOURCE_FOLDER, "icu_dka_dataset_20260415.csv"))
     train_data = pd.read_csv(os.path.join(RESOURCE_FOLDER, "icu_dka_train_data.csv"))
     test_data = pd.read_csv(os.path.join(RESOURCE_FOLDER, "icu_dka_test_data.csv"))
-
 
     output_dir = "dp_cgans/tests/output"
     generated_model_path = f'{output_dir}/generators'
@@ -178,19 +179,41 @@ if __name__ == "__main__":
     os.makedirs(evaluation_path, exist_ok=True)
     syn_path = f'{output_dir}/synthetic_data'
     os.makedirs(syn_path, exist_ok=True)
+    utility_path = f'{output_dir}/utility'
+    os.makedirs(utility_path, exist_ok=True)
 
-    config = DPCGANConfig(
-        epochs=2000,
-        batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
-        generator_dim=(256, 256, 256),
-        discriminator_dim=(256, 256, 256),
-        generator_lr=2e-5,
-        discriminator_lr=2e-5,
-        discriminator_steps=5,
-        private=False,
-        focus_update_interval=5,
-        focus_target_ratio=0.5, # low 0.1, medium 0.3, high 0.5
-        saved_transformer=transformers_path+'/fitted_transformer.pkl'
-    )    
-    main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name="config", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[])
+    if GENERATE_SYNTHETIC_DATA:
+        config = DPCGANConfig(
+            epochs=2000,
+            batch_size=60, # ~6% of 1086 (64) and ~6% of 1711 (100)
+            generator_dim=(256, 256, 256),
+            discriminator_dim=(256, 256, 256),
+            generator_lr=2e-5,
+            discriminator_lr=2e-5,
+            discriminator_steps=5,
+            private=False,
+            focus_update_interval=5,
+            xai_weight=1, 
+            focus_k_features=15,# if 0 DISABLES focus vector
+            saved_transformer=transformers_path+'/fitted_transformer.pkl'
+        )    
+        main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name="config", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[])
 
+    if RUN_UTILITY_EXPERIMENTS:
+        # Run utility experiments list
+        experiment_list = [
+            ("baseline", 'config_3_syn_data_fold_*.csv'),
+            ("test", 'syn_data_fold_*.csv'),
+            # ("focus_0.1", 'conf_0.1_syn_data_fold_*.csv'),
+        ]
+        for data_name, syn_pattern in experiment_list:
+            print(f"Running utility experiments for {data_name} with pattern {syn_pattern}...")
+            run_experiment_list(
+                result_path=utility_path,
+                real_fold_path=os.path.join(RESOURCE_FOLDER, "folds"),
+                syn_fold_path=syn_path,
+                real_pattern="train_fold_*.csv",
+                syn_pattern=syn_pattern,
+                data_name=data_name,
+                thresholds=[0.0689, 0.1243, 0.0865, 0.1692, 0.3140]
+            )
