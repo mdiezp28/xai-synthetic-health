@@ -356,89 +356,12 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
             threshold=threshold
         )
 
-def main():
-    dataset_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/"
-    result_path = os.path.join(dataset_path,'_utility/')
 
-    # train_data = pd.read_csv(os.path.join(dataset_path, 'real_train.csv'))
-    # test_data = pd.read_csv(os.path.join(dataset_path, 'real_test.csv'))
-    # real_data = pd.read_csv('./dp_cgans/resources/icu_dka_dataset_simplify.csv').drop("subject_id", axis=1).drop("sofa", axis=1)
-    # experiment_list = [
-    #     # ("baseline", '2026_01_21_11_30_26_syn_bs_250_e2500.csv'),
-    #     ("shap2", '2026_01_22_03_36_40_syn_shap_2_3.csv'),
-    #     # ("shap5", '2026_01_22_05_09_09_syn_shap_5_3.csv'),
-    #     # ("shap10", '2026_01_22_00_31_23_syn_shap_10_2.csv'),
-    #     ("positive_baseline", 'syn_data_baseline_positives.csv'),
-    #     ("positive_shap2", 'syn_data_shap_2_positives.csv'),
-    # ]
-
-    
-    # for data_name, syn_data in experiment_list:
-    #     syn_dataset = pd.read_csv(os.path.join(dataset_path, syn_data))
-    #     run_experiment_list(
-    #         synthetic_data=syn_dataset,
-    #         train_data=train_data,
-    #         test_data=test_data,
-    #         result_path=result_path,
-    #         data_name=data_name,
-    #     )
-
-
-    runner = ExperimentRunner()
-    
-    print("\n" + "="*80)
-    print("Real data")
-    print("="*80 + "\n")
-    data_name = "full_dataset"
-    real_data = pd.read_csv('./dp_cgans/resources/icu_dka_dataset_simplify.csv').drop("subject_id", axis=1)
-    runner.run_stratified_kfold(
-        real_data=real_data,
-        syn_data=None,
-        syn_percentage=0,
-        n_splits=5,
-        out_dir=result_path + data_name + "/",
-        exp_name=data_name,
-    )
-    runner.run_experiment(
-                train_data=real_data, 
-                test_data=None,
-                out_dir=result_path+data_name+"/",
-                exp_name=data_name,
-            )
-
-    # print("\n" + "="*80)
-    # print("Real data no sofa")
-    # print("="*80 + "\n")
-    # data_name = "full_dataset_no_sofa"
-    # real_data = real_data.drop("sofa", axis=1)
-    # runner = ExperimentRunner()
-    # runner.run_stratified_kfold(
-    #     real_data=real_data,
-    #     syn_data=None,
-    #     syn_percentage=0,
-    #     n_splits=5,
-    #     out_dir=result_path + data_name + "/",
-    #     exp_name=data_name,
-    # )
-    # runner.run_experiment(
-    #             train_data=real_data, 
-    #             test_data=None,
-    #             out_dir=result_path+data_name+"/",
-    #             exp_name=data_name,
-    # )
-def run_exp_syn(syn_path, syn_file, data_name):
-    result_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/utility/"
-    # Real data folds
-    real_fold_path = "C:/Users/maria/OneDrive - Maastricht University/Maria Diez Perez/datasets/"
-    real_file = f"icu_dka_train_data.csv"
-    
-
-    threshold = 0.1526
-    
+def run_exp_syn(result_path, real_path, syn_path, real_file, syn_file, data_name, threshold=None):
     syn_data = pd.read_csv(os.path.join(syn_path, syn_file))
 
-    real_data = pd.read_csv(os.path.join(real_fold_path, real_file)).drop(columns=["sofa", "subject_id"], errors="ignore")
-    test_data = pd.read_csv(os.path.join(real_fold_path, "icu_dka_test_data.csv")).drop(columns=["sofa", "subject_id"], errors="ignore")
+    real_data = pd.read_csv(os.path.join(real_path, real_file)).drop(columns=["sofa", "subject_id"], errors="ignore")
+    test_data = pd.read_csv(os.path.join(real_path, "icu_dka_test_data.csv")).drop(columns=["sofa", "subject_id"], errors="ignore")
     run_experiment_list(
             synthetic_data=syn_data,
             train_data=real_data, 
@@ -448,24 +371,8 @@ def run_exp_syn(syn_path, syn_file, data_name):
             threshold=threshold
     )
         
-        # experiment_list = [
-    #     # ("baseline", '2026_01_21_11_30_26_syn_bs_250_e2500.csv'),
-    #     # ("shap2", '2026_01_22_03_36_40_syn_shap_2_3.csv'),
-    #     # ("shap5", '2026_01_22_05_09_09_syn_shap_5_3.csv'),
-    #     # ("shap10", '2026_01_22_00_31_23_syn_shap_10_2.csv'),
-    #     # ("positive_baseline", 'syn_data_baseline_positives.csv'),
-    #     # ("positive_shap2", 'syn_data_shap_2_positives.csv'),
-    # ]
-    # for data_name, syn_data in experiment_list:
 
-def run_exp_syn_folds(syn_fold_path, syn_pattern, data_name):
-    th = [0.0689, 0.1243, 0.0865, 0.1692, 0.3140]
-    result_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/utility/"
-    # Real data folds
-    real_fold_path = "C:/Users/maria/OneDrive - Maastricht University/Maria Diez Perez/datasets/folds/"
-    real_pattern = f"train_fold_*.csv"
-
-
+def run_exp_syn_folds(result_path, real_fold_path, syn_fold_path, real_pattern, syn_pattern, data_name, thresholds=[0.5, 0.5, 0.5, 0.5, 0.5]):
     sorted_files = sorted(glob.glob( os.path.join(syn_fold_path, syn_pattern)))
     for syn_file in sorted_files:
         fold_idx = int(re.search(r"fold_(\d+)", syn_file).group(1))
@@ -484,20 +391,14 @@ def run_exp_syn_folds(syn_fold_path, syn_pattern, data_name):
                 test_data=test_data,
                 result_path=result_path,
                 data_name=data_name,
-                threshold=th[fold_idx-1],
+                threshold=thresholds[fold_idx-1],
                 fold_num=fold_idx
         )
         print(f"Finished {syn_data}")
 
     # save_folds_metrics(results, out_dir=result_path, exp_name="real_data_folds")
 
-def run_real_folds(epochs=4000):
-    # th = [0.14829367, 0.05401431, 0.17826173, 0.25452912, 0.1255561]
-
-    fold_path = "C:/Users/maria/OneDrive - Maastricht University/Maria Diez Perez/datasets/folds/"
-    result_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/utility/"
-    pattern = f"train_fold_*.csv"
-    data_name = "real"
+def run_real_folds(fold_path, result_path, pattern,data_name):
     runner = ExperimentRunner()
     results = []
     for i in range(5):
@@ -518,10 +419,7 @@ def run_real_folds(epochs=4000):
 
     save_folds_metrics(results, out_dir=result_path, exp_name="real_data_folds")
 
-def run_real_train():
-    data_path = "C:/Users/maria/OneDrive - Maastricht University/Maria Diez Perez/datasets/"
-    result_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/utility/"
-    threshold = 0.1526
+def run_real_train(result_path, data_path, threshold=None):
     runner = ExperimentRunner()
 
     train_data = pd.read_csv(os.path.join(data_path, "icu_dka_train_data.csv")).drop(columns=["sofa", "subject_id"], errors="ignore")
@@ -535,40 +433,8 @@ def run_real_train():
             threshold=threshold
     )
 
-def run_utility_folds(path, pattern, data_name):
-    th = [0.0689, 0.1243, 0.0865, 0.1692, 0.3140]
-    result_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/utility/pre_exp/"
-    fold_path = "C:/Users/maria/OneDrive - Maastricht University/Maria Diez Perez/datasets/folds/"
-    runner = ExperimentRunner()
-    results = []
-    sorted_files = sorted(glob.glob( os.path.join(path, pattern)))
-    for file in sorted_files:
-        fold_idx = int(re.search(r"fold_(\d+)", file).group(1))
 
-        print("\n" + "="*80)
-        print(f"Start {file}")
-        print("="*80 + "\n")
-        #check if file exists        
-        if not os.path.exists(file):
-            print(f"File {file} not found")
-            continue
-        train_data = pd.read_csv(file).drop(columns=["sofa", "subject_id"], errors="ignore")
-        test_data = pd.read_csv(os.path.join(fold_path, f"val_fold_{fold_idx}.csv")).drop(columns=["sofa", "subject_id"], errors="ignore")
-        exp_name = f"{data_name}_fold_{fold_idx}"
-        results.append(runner.run_experiment(
-                train_data=train_data, 
-                test_data=test_data,
-                out_dir=result_path+data_name+f"/fold_{fold_idx}/",
-                exp_name=exp_name,
-                threshold=th[fold_idx-1]
-        ))
-        print(f"Finished {file}")
-
-    # save_folds_metrics(results, out_dir=result_path, exp_name=data_name+"_folds")
-
-
-def run_hyperparameters_tuning():
-    fold_path = "C:/Users/maria/OneDrive - Maastricht University/Maria Diez Perez/datasets/folds/"
+def run_hyperparameters_tuning(fold_path):
     X_data, y_data, test_fold = dataset_mixing.build_dataset_from_folds(fold_path=fold_path)
     # ps = PredefinedSplit(test_fold)
 
@@ -588,102 +454,47 @@ def run_hyperparameters_tuning():
     best_params, best_score, grid = model_wrapper.find_best_params(X_data, y_data, test_fold)
  
 if __name__ == "__main__":
+    """ 
+        Documentation:
+            syn_fold_path = ""
+            real_fold_path = ""
+            data_path = ""
+            result_path = ""
+            ----- HYPERPARAMETERS TUNING -----
+            run_hyperparameters_tuning(fold_path)
+
+            ----- RUN REAL TRAIN -----
+            pattern = f"train_fold_*.csv"
+            data_name = "real"
+            run_real_train(result_path, data_path, threshold=0.1526)
+
+            ----- RUN REAL FOLDS -----
+            run_real_folds(fold_path, result_path, pattern, data_name)
+
+            ----- RUN SYNTHETIC -----
+            real_file = f"icu_dka_train_data.csv"
+            run_exp_syn(result_path, data_path, syn_path, real_file, syn_file, data_name, threshold = 0.1526)
+
+            ----- RUN SYNTHETIC FOLDS -----    
+            real_pattern = f"train_fold_*.csv"
+            run_exp_syn_folds(result_path, real_fold_path, syn_fold_path, real_pattern, syn_pattern, data_name, thresholds=[0.0689, 0.1243, 0.0865, 0.1692, 0.3140]):
+        
+    """
     print("Starting utility experiments...")
     # Syn data folds
-    syn_fold_path = "C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/syn_data/"
-
-    # main()
-    # run_hyperparameters_tuning()
-    # run_real_folds()
-    # run_exp_syn_folds(
-    #     syn_fold_path=syn_fold_path,
-    #     syn_pattern="*_baseline_bs_80_fold_*.csv",
-    #     data_name="baseline"
-    # )
-    # run_exp_syn_folds(
-    #     syn_fold_path=syn_fold_path,
-    #     syn_pattern="*_shap_2_fold_*.csv",
-    #     data_name="shap2"
-    # )
-    # run_exp_syn_folds(
-    #     syn_fold_path=syn_fold_path,
-    #     syn_pattern="*_shap_0.5_fold_*.csv",
-    #     data_name="shap0.5"
-    # )
-    # run_exp_syn_folds(
-    #     syn_fold_path=syn_fold_path,
-    #     syn_pattern="*_shap_1.5_fold_*.csv",
-    #     data_name="shap1.5"
-    # )
-
-    # run_exp_syn_folds(
-    #     syn_fold_path=syn_fold_path,
-    #     syn_pattern="shap_1.5_positives_fold_*.csv",
-    #     data_name="shap1.5_positives"
-    # )
-    # run_exp_syn_folds(
-    #     syn_fold_path=syn_fold_path,
-    #     syn_pattern="baseline_positives_fold_*.csv",
-    #     data_name="baseline_positives"
-    # )
-
+    syn_fold_path = ""
+    # run_exp_syn_folds -> to run synthetic data folds experiment list
     experiment_list = [
-        # ("baseline_final", '2026_03_01_21_59_12_baseline.csv'),
-        # ("shap_final", '2026_03_03_08_10_44_shap1.5.csv'),
-        # ("baseline_positives_final", 'baseline_positives.csv'),
-        ("shap_positives_final", 'shap1.5_positives.csv'),
+        ("baseline", 'config_3_syn_data_fold_*.csv'),
+        # ("focus_conv", 'conv_syn_data_fold_*.csv'),
+        # ("focus_0.1", 'conf_0.1_syn_data_fold_*.csv'),
     ]
     for data_name, syn_data in experiment_list:
-        run_exp_syn(
-            syn_path=syn_fold_path,
-            syn_file=syn_data,  
+        run_exp_syn_folds(
+            syn_fold_path=syn_fold_path,
+            syn_pattern=syn_data,
             data_name=data_name
         )
-
-    
-
-
-
-    # run_real_train()
-    # run_utility_folds(
-    #     path="C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/syn_data/",
-    #     pattern="*_shap_5_fold_*.csv",
-    #     data_name="shap5"
-    # )
-    # run_utility_folds(
-    #     path="C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/syn_data/",
-    #     pattern="*_shap_2_fold_*.csv",
-    #     data_name="shap2"
-    # )
-    # run_utility_folds(
-    #     path="C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/syn_data/",
-    #     pattern="*_shap_1_fold_5.csv",
-    #     data_name="shap1"
-    # )
-    # run_utility_folds(
-    #     path="C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/syn_data/",
-    #     pattern="*_baseline_e_4000_fold_*.csv",
-    #     data_name="4000_epochs"
-    # )
-
-    # run_utility_folds(
-    #     path="C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/syn_data/",
-    #     pattern="*_shap_0.5_fold_*.csv",
-    #     data_name="shap0.5"
-    # )
-    # run_utility_folds(
-    #     path="C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/syn_data/",
-    #     pattern="*_shap_1.5_fold_5.csv",
-    #     data_name="shap1.5"
-    # )
-    # for i in range(1,6):
-    #     if i > 2:
-    #         run_utility_folds(
-    #             path="C:/Users/maria/iCloudDrive/Documents/Studies/AI/Thesis/full_results/syn_data/",
-    #             pattern=f"*_shap_3_fold_{i}.csv",
-    #             data_name="shap3"
-    #         )
-
 
 
 # Train XGBoost classifier
