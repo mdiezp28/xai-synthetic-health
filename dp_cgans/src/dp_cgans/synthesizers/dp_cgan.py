@@ -53,8 +53,8 @@ def _shap_to_torch_matrix(sv, X_like: torch.Tensor) -> torch.Tensor:
     if isinstance(sv, list):  # single-output models return [array]
         sv = sv[0]
     t = torch.as_tensor(sv, device=X_like.device, dtype=torch.float32)
-    # if t.dim() == 3 and t.shape[-1] == 1:
-    #     t = t.squeeze(-1)
+    if t.dim() == 3 and t.shape[-1] == 1:
+        t = t.squeeze(-1)
     # If SHAP gave [F, B], transpose to [B, F]
     if t.dim() == 2 and t.shape[0] == X_like.shape[1] and t.shape[1] == X_like.shape[0]:
         t = t.T
@@ -146,6 +146,10 @@ class Discriminator(Module):
             shap_tn = fake_shap[fake_low_mask]
             shap_fp = fake_shap[fake_high_mask]
 
+                        
+            # TN is used for the focus vector TP FN and FP are only used for diagnostics and logging.
+            shap_tn_data_dim = shap_tn[:, :data_dim] # removed the part corresponding to the conditional vector
+            
             groups = _build_feature_groups(transformer.output_info_list)
 
             def aggregate(x):
@@ -163,7 +167,9 @@ class Discriminator(Module):
             I_tn = shap_tn.mean(dim=0) if shap_tn.shape[0] > 0 else None
             I_fp = shap_fp.mean(dim=0) if shap_fp.shape[0] > 0 else None
 
-            # average total contribution per sample in the group
+            # Importances for TN in expanded dimension
+            I_tn_expanded = shap_tn_data_dim.mean(dim=0) if shap_tn_data_dim.shape[0] > 0 else None
+            # average total contribution per sample in the group (only for debuggging)
             tp_total = shap_tp.sum(dim=1).mean()
             fn_total = shap_fn.sum(dim=1).mean()
             tn_total = shap_tn.sum(dim=1).mean()
@@ -174,7 +180,8 @@ class Discriminator(Module):
                 "tp": I_tp,
                 "fn": I_fn,
                 "tn": I_tn,
-                "fp": I_fp
+                "fp": I_fp,
+                "tn_expanded": I_tn_expanded
             }
             return importances
             
@@ -452,24 +459,29 @@ class DPCGANSynthesizer(BaseSynthesizer):
         else:
             self._focus_signal = None
 
-    def _update_focus_signal(self, I_tn: torch.Tensor, k_features: int) -> None:
-        if self._focus_signal is None or I_tn is None or k_features == 0:
+    def _update_focus_signal(self, I_tn: torch.Tensor) -> None:
+        if self._focus_signal is None or I_tn is None or self.focus_k_features == 0:
             return
 
-        I_tn_cpu = I_tn.detach().cpu()
-        
+        I_cpu = I_tn.detach().cpu()
         groups = _build_feature_groups(self._transformer.output_info_list)
-        data_dim = self._transformer.output_dimensions
 
-        selected_values, selected_indices = torch.topk(I_tn_cpu, k=k_features, largest=False)
+        # aggregate to column level using negative-only sum for selection
+        I_cols = torch.stack([
+            I_cpu[sl].clamp(max=0).sum()
+            for sl in groups
+        ])
+
+        # select the k features with lowest (most negative) importance
+        selected_values, selected_indices = torch.topk(I_cols, k=self.focus_k_features, largest=False)
 
         # Keep only features with negative SHAP — discard any that are >= 0
         negative_mask = selected_values < 0
         selected_values  = selected_values[negative_mask]
         selected_indices = selected_indices[negative_mask]
 
-        new_signal = torch.zeros(data_dim, device=self._device)
-        col_signal = torch.zeros(I_tn_cpu.shape[0], device=self._device)
+        new_signal = torch.zeros(len(I_cpu), device=self._device)
+        col_signal = torch.zeros(len(groups), device=self._device)
         if selected_indices.numel() == 0:
             print(f"[features focus] No features with negative SHAP values found. Focus signal not updated.")
         else:
@@ -477,10 +489,13 @@ class DPCGANSynthesizer(BaseSynthesizer):
             magnitudes = selected_values.abs()
             soft_weights = magnitudes / magnitudes.max()
             for rank, col_idx in enumerate(selected_indices.tolist()):
-                if col_idx < len(groups):
-                    sl = groups[col_idx]
-                    new_signal[sl] = float(soft_weights[rank])
-                    col_signal[col_idx] = float(soft_weights[rank])
+                sl = groups[col_idx]
+                # negative dims only, normalized
+                raw          = I_cpu[sl]
+                raw_negative = raw.clamp(max=0).abs()
+                raw_norm     = raw_negative / (raw_negative.max() + 1e-8)
+
+                new_signal[sl] = float(soft_weights[rank]) * raw_norm
 
             print(f"[features focus] Updated focus signal:  {selected_indices.numel()} "
             f"{selected_indices.tolist()}  "
@@ -926,9 +941,11 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
                         # ── SHAP update (every focus_update_interval epochs) ───
                         if i > 0 and i % self.focus_update_interval == 0 and id_ == 0 and n == 0:
-                            tp, fn, tn, fp = self._discriminator.calc_shap_importance(
+                            importances_dict = self._discriminator.calc_shap_importance(
                                 real_cat, fake_cat, self._transformer
                             )
+                            tp, fn, tn, fp = importances_dict["tp"], importances_dict["fn"], importances_dict["tn"], importances_dict["fp"]
+                            tn_expanded = importances_dict["tn_expanded"]
                             column_names = [
                                 info.column_name
                                 for info in self._transformer._column_transform_info_list
@@ -937,7 +954,7 @@ class DPCGANSynthesizer(BaseSynthesizer):
 
                             # ── Update generator focus signal from TN SHAP ────
                             if tn is not None and self.focus_k_features > 0:
-                                self._update_focus_signal(tn, self.focus_k_features)
+                                self._update_focus_signal(tn_expanded)
                                 # Log focus signal to TensorBoard
                                 if self._focus_col_signal is not None:
                                     writer.add_scalar("focus/norm", float(self._focus_signal.norm()), i)
