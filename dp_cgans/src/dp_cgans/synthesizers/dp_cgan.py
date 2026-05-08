@@ -53,6 +53,8 @@ def _shap_to_torch_matrix(sv, X_like: torch.Tensor) -> torch.Tensor:
     if isinstance(sv, list):  # single-output models return [array]
         sv = sv[0]
     t = torch.as_tensor(sv, device=X_like.device, dtype=torch.float32)
+    # if t.dim() == 3 and t.shape[-1] == 1:
+    #     t = t.squeeze(-1)
     # If SHAP gave [F, B], transpose to [B, F]
     if t.dim() == 2 and t.shape[0] == X_like.shape[1] and t.shape[1] == X_like.shape[0]:
         t = t.T
@@ -104,6 +106,8 @@ class Discriminator(Module):
         real_data = real_data.detach()
         fake_data = fake_data.detach()
 
+        data_dim = transformer.output_dimensions
+
         try:
             self.enable_rowwise(True)
 
@@ -134,7 +138,7 @@ class Discriminator(Module):
             
             # split by size real vs fake
             real_shap = sv_full[:shap_batch_size]
-            fake_shap = sv_full[shap_batch_size:shap_batch_size*2]
+            fake_shap = sv_full[-shap_batch_size:]
 
             shap_tp = real_shap[real_high_mask]
             shap_fn = real_shap[real_low_mask]
@@ -142,32 +146,18 @@ class Discriminator(Module):
             shap_tn = fake_shap[fake_low_mask]
             shap_fp = fake_shap[fake_high_mask]
 
-            # if shap_tp.shape[0] < 5 or shap_fp.shape[0] < 5:
-            #     return None, None, None, None
-
-            data_dim = transformer.output_dimensions
             groups = _build_feature_groups(transformer.output_info_list)
 
             def aggregate(x):
                 x = x[:, :data_dim]
                 result = torch.stack([x[:, sl].sum(dim=1) for sl in groups], dim=1)
-                return result.squeeze(-1)
+                return result
 
             shap_tp = aggregate(shap_tp)
             shap_fn = aggregate(shap_fn)
             shap_tn = aggregate(shap_tn)
             shap_fp = aggregate(shap_fp)
-            # min_samples = 3
-            # I_tp = I_fn = I_tn = I_fp = None
             print(f"SHAP group shapes: tp={shap_tp.shape}, fn={shap_fn.shape}, tn={shap_tn.shape}, fp={shap_fp.shape}")
-            # if (shap_tp.shape[0] > min_samples):
-            #     I_tp = shap_tp.median(dim=0).values
-            # if (shap_fn.shape[0] > min_samples):
-            #     I_fn = shap_fn.median(dim=0).values
-            # if (shap_tn.shape[0] > min_samples):
-            #     I_tn = shap_tn.median(dim=0).values
-            # if (shap_fp.shape[0] > min_samples):
-            #     I_fp = shap_fp.median(dim=0).values
             I_tp = shap_tp.mean(dim=0) if shap_tp.shape[0] > 0 else None
             I_fn = shap_fn.mean(dim=0) if shap_fn.shape[0] > 0 else None
             I_tn = shap_tn.mean(dim=0) if shap_tn.shape[0] > 0 else None
@@ -179,7 +169,14 @@ class Discriminator(Module):
             tn_total = shap_tn.sum(dim=1).mean()
             fp_total = shap_fp.sum(dim=1).mean()
             print(f"Avg SHAP contribution: tp={tp_total.item()}, fn={fn_total.item()}, tn={tn_total.item()}, fp={fp_total.item()}")
-            return I_tp, I_fn, I_tn, I_fp
+            # return dict with Importances
+            importances = {
+                "tp": I_tp,
+                "fn": I_fn,
+                "tn": I_tn,
+                "fp": I_fp
+            }
+            return importances
             
         finally:
             # Always restore original state
