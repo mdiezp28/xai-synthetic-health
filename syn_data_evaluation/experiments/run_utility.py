@@ -260,20 +260,26 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
             else:
                 out_dir = result_path+exp_name+f"/fold_{fold_num}/"
                 exp_name = exp_name + f"_fold_{fold_num}"
-            hybrid_data = dataset_mixing.get_hybrid_data(
-                train_data=train_data,
-                syn_data=synthetic_data,
-                syn_pct=perc,
-                constant_size=True,
-                match_real=True
-            )
-            runner.run_experiment(
-                train_data=hybrid_data, 
-                test_data=test_data,
-                out_dir=out_dir,
-                exp_name=exp_name,
-                threshold=threshold
-            )
+            # catch error if syn_size is larger than available synthetic data
+            try:
+                hybrid_data = dataset_mixing.get_hybrid_data(
+                    train_data=train_data,
+                    syn_data=synthetic_data,
+                    syn_pct=perc,
+                    constant_size=True,
+                    match_real=True
+                )
+                runner.run_experiment(
+                    train_data=hybrid_data, 
+                    test_data=test_data,
+                    out_dir=out_dir,
+                    exp_name=exp_name,
+                    threshold=threshold
+                )
+            except ValueError as e:
+                print(f"Error occurred while creating hybrid data for {exp_name}: {e}")
+                continue
+
 
         print("\n" + "="*80)
         print("Experiment 3.1: \n Training data: Hybrid data - Augmentation.\n Test data: real test data.")
@@ -286,20 +292,25 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
             else:
                 out_dir = result_path+exp_name+f"/fold_{fold_num}/"
                 exp_name = exp_name + f"_fold_{fold_num}"
-            hybrid_data = dataset_mixing.get_hybrid_data(
-                train_data=train_data,
-                syn_data=synthetic_data,
-                syn_pct=perc,
-                constant_size=False,
-                match_real=True
-            )
-            runner.run_experiment(
-                train_data=hybrid_data, 
-                test_data=test_data,
-                out_dir=out_dir,
-                exp_name=exp_name,
-                threshold=threshold
-            )
+            try:
+                hybrid_data = dataset_mixing.get_hybrid_data(
+                    train_data=train_data,
+                    syn_data=synthetic_data,
+                    syn_pct=perc,
+                    constant_size=False,
+                    match_real=True
+                )
+                runner.run_experiment(
+                    train_data=hybrid_data, 
+                    test_data=test_data,
+                    out_dir=out_dir,
+                    exp_name=exp_name,
+                    threshold=threshold
+                )
+            except ValueError as e:
+                print(f"Error occurred while creating hybrid data for {exp_name}: {e}")
+                continue
+            
 
 
     print("\n" + "="*80)
@@ -314,20 +325,25 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
             out_dir = result_path+exp_name+f"/fold_{fold_num}/"
             exp_name = exp_name + f"_fold_{fold_num}"
 
-        hybrid_data = dataset_mixing.get_hybrid_data(
-            train_data=train_data,
-            syn_data=synthetic_data,
-            syn_pct=perc,
-            constant_size=True,
-            match_real=False
-        )
-        runner.run_experiment(
-            train_data=hybrid_data, 
-            test_data=test_data,
-            out_dir=out_dir,
-            exp_name=exp_name,
-            threshold=threshold
-        )
+        try:
+            hybrid_data = dataset_mixing.get_hybrid_data(
+                train_data=train_data,
+                syn_data=synthetic_data,
+                syn_pct=perc,
+                constant_size=True,
+                match_real=False
+            )
+            runner.run_experiment(
+                train_data=hybrid_data, 
+                test_data=test_data,
+                out_dir=out_dir,
+                exp_name=exp_name,
+                threshold=threshold
+            )
+        except ValueError as e:
+            print(f"Error occurred while creating hybrid data for {exp_name}: {e}")
+            continue
+        
 
     print("\n" + "="*80)
     print("Experiment 3.2: \n Training data: Hybrid data - Augmentation. Random selection.\n Test data: real test data.")
@@ -341,20 +357,25 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
             out_dir = result_path+exp_name+f"/fold_{fold_num}/"
             exp_name = exp_name + f"_fold_{fold_num}"
 
-        hybrid_data = dataset_mixing.get_hybrid_data(
-            train_data=train_data,
-            syn_data=synthetic_data,
-            syn_pct=perc,
-            constant_size=False,
-            match_real=False
-        )
-        runner.run_experiment(
-            train_data=hybrid_data, 
-            test_data=test_data,
-            out_dir=out_dir,
-            exp_name=exp_name,
-            threshold=threshold
-        )
+        try:
+            hybrid_data = dataset_mixing.get_hybrid_data(
+                train_data=train_data,
+                syn_data=synthetic_data,
+                syn_pct=perc,
+                constant_size=False,
+                match_real=False
+            )
+            runner.run_experiment(
+                train_data=hybrid_data, 
+                test_data=test_data,
+                out_dir=out_dir,
+                exp_name=exp_name,
+                threshold=threshold
+            )
+        except ValueError as e:
+            print(f"Error occurred while creating hybrid data for {exp_name}: {e}")
+            continue
+        
 
 
 def run_exp_syn(result_path, real_path, syn_path, real_file, syn_file, data_name, threshold=None):
