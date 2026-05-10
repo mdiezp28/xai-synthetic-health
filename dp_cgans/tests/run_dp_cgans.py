@@ -1,8 +1,13 @@
 from datetime import datetime
-import pandas as pd
-from dp_cgans import DP_CGAN
 import os
+import random
+
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
+import numpy as np
+import pandas as pd
 import torch
+from dp_cgans import DP_CGAN
 # from notebooks.sampling import post_process_synthetic_data
 
 class DPCGANConfig: 
@@ -10,7 +15,8 @@ class DPCGANConfig:
                  discriminator_dim=(128, 128, 128), generator_lr=5e-5, 
                  discriminator_lr=5e-5, discriminator_steps=5, private=False,
                  saved_transformer=os.getcwd()+'/fitted_transformer.pkl', pac=10, 
-                 focus_k_features=0, focus_update_interval=50, xai_weight=0.0):
+                 focus_k_features=0, focus_update_interval=50, xai_weight=0.0,
+                 seed=42, deterministic=True):
         self.epochs = epochs
         self.batch_size = batch_size
         self.generator_dim = generator_dim
@@ -24,11 +30,31 @@ class DPCGANConfig:
         self.focus_k_features = focus_k_features
         self.focus_update_interval = focus_update_interval
         self.xai_weight = xai_weight
+        self.seed = seed
+        self.deterministic = deterministic
+
+
+def set_global_seed(seed=42, deterministic=True):
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    if deterministic:
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.use_deterministic_algorithms(True, warn_only=True)
 
 def run_dp_cgans(tabular_data, output_file, generated_model_path, config= None, save_output=False):
     print(f'Testing DP_CGAN')
     if config is None:
         config = DPCGANConfig()
+    set_global_seed(config.seed, config.deterministic)
+    print(f"Seed set to {config.seed}; deterministic algorithms enabled: {config.deterministic}")
 
     model = DP_CGAN(
         epochs=config.epochs, # number of training epochs
