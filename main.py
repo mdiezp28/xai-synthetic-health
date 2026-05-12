@@ -1,12 +1,13 @@
 import os
 import glob
 import re
+import time
 import pandas as pd
 from sklearn.model_selection import StratifiedGroupKFold
 from syn_data_evaluation.data import postprocessing
 from syn_data_evaluation.evaluation.fidelity_evaluator import run_simple_evaluation
 from syn_data_evaluation.experiments.run_fidelity import get_submetadata
-from syn_data_evaluation.experiments.run_utility import ExperimentRunner, run_exp_syn_folds as run_experiment_list
+from syn_data_evaluation.experiments.run_utility import ExperimentRunner, run_exp_syn_folds as run_experiment_list, sample_dp_cgans
 from tests.run_dp_cgans import DPCGANConfig, run_dp_cgans
 
 
@@ -55,6 +56,62 @@ def assert_no_patient_leakage(train_df, test_df, group_col):
     overlap = train_ids.intersection(test_ids)
     assert len(overlap) == 0, f"Patient leakage detected! Overlap size: {len(overlap)}"
 
+def generate_positive_samples(syn_path, syn_pattern, generators_path):
+    # find the original syn-data files
+    original_files = glob.glob(os.path.join(syn_path, syn_pattern))
+    # for each fold file → locate its model → generate positives ─
+    for syn_file in sorted(original_files):
+        syn_data_len = len(pd.read_csv(syn_file))
+        basename = os.path.basename(syn_file)
+        print(f"\n  Processing: {basename}")
+
+        # extract fold number (optional, used for output naming)
+        fold_match = re.search(r"fold_(\d+)", basename)
+        fold_num   = fold_match.group(1) if fold_match else "X"
+
+        # extract date string embedded in the filename
+        date_str = extract_date_from_filename(basename)
+        if date_str is None:
+            print(f"  [WARN] Could not extract date from '{basename}'. Skipping.")
+            continue
+
+        print(f"  Extracted date : {date_str}")
+
+        # find the matching generator model
+        model_path = find_model_for_date(date_str, generators_path)
+        if model_path is None:
+            print(f"  [WARN] No model found for date {date_str} in {generators_path}. Skipping.")
+            continue
+
+        print(f"  Model found    : {model_path}")
+
+        output_stem = os.path.join(
+            syn_path,
+            f"{data_name}_pos_fold_{fold_num}_{date_str}",
+        )
+        # generate positive samples using the model and save
+        sample_dp_cgans(model_path, nb_rows=syn_data_len, output_file=output_stem, current_time=None, conditions={"in_hospital_death": 1})
+
+def extract_date_from_filename(filename: str) -> str | None:
+    """
+    Pull the date/timestamp token out of a syn-data filename.
+
+    Expects patterns like:
+        baseline_syn_data_fold_1_2026_01_03_20_13_38.csv
+        shap_focus_10f_weight_1_int25_fold_2_2026_02_14_10_00_00
+    Returns e.g. '2026_01_03_20_13_38', or None if not found.
+    """
+    match = re.search(r"(\d{4}(?:_\d{2}){5})", filename)
+    return match.group(1) if match else None
+
+
+def find_model_for_date(date_str: str, generators_path: str) -> str | None:
+    """
+    Given a date string like '2026_01_03_20_13_38', look for
+    <generators_path>/<date_str>_icu_dka.pkl
+    """
+    model_path = os.path.join(generators_path, f"{date_str}_dpcgans_icu_dka.pkl")
+    return model_path if os.path.exists(model_path) else None
 
 def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital_death", group_col="subject_id", save_folds=True, config=None, exp_name="baseline", generated_model_path="output/generators", syn_path="output/synthetic_data", evaluation_path="output/evaluation", skip_fold=[]):
     if real_data is not None:
@@ -206,8 +263,20 @@ if __name__ == "__main__":
             ("test", 'syn_data_fold_*.csv'),
             # ("focus_0.1", 'conf_0.1_syn_data_fold_*.csv'),
         ]
+        
+        utility_start = time.perf_counter()
         for data_name, syn_pattern in experiment_list:
             print(f"Running utility experiments for {data_name} with pattern {syn_pattern}...")
+            experiment_start = time.perf_counter()
+
+            # check if positive samples exist
+            pos_pattern = syn_pattern.replace("*.csv", "pos_*.csv")
+            syn_files = glob.glob(os.path.join(syn_path, pos_pattern))
+            if not syn_files:
+                # If no pos_*.csv files, generate them by filtering the original syn_data_fold_*.csv files
+                print(f"No files matching {pos_pattern} found. Generating positive samples...")
+                generate_positive_samples(syn_path, syn_pattern, generated_model_path)
+
             run_experiment_list(
                 result_path=utility_path,
                 real_fold_path=os.path.join(RESOURCE_FOLDER, "folds"),
@@ -217,3 +286,8 @@ if __name__ == "__main__":
                 data_name=data_name,
                 thresholds=[0.0689, 0.1243, 0.0865, 0.1692, 0.3140]
             )
+            experiment_elapsed = time.perf_counter() - experiment_start
+            print(f"Utility experiments for {data_name} finished in {experiment_elapsed / 60:.2f} minutes ({experiment_elapsed:.2f} seconds).")
+
+        utility_elapsed = time.perf_counter() - utility_start
+        print(f"All utility experiments finished in {utility_elapsed / 60:.2f} minutes ({utility_elapsed:.2f} seconds).")

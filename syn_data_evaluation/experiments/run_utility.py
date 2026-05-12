@@ -206,7 +206,7 @@ def save_folds_metrics(experiment_results, out_dir: str = "outputs", exp_name: s
         "summary_df": summary_df,
     }
     
-def run_experiment_list(synthetic_data, train_data, test_data, result_path, data_name, threshold=None, fold_num=0):
+def run_experiment_list(synthetic_data, train_data, test_data, result_path, data_name, threshold=None, fold_num=0, postprocess=True):
     """
     Run complete list of experiments comparing synthetic and real data.
     
@@ -217,7 +217,8 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
     4. Train on hybrid (constant size, random syn data), test on real
     5. Train on hybrid (augmented, random syn data), test on real
     """
-    synthetic_data = postprocessing.postprocess_for_utility(synthetic_data)
+    if postprocess:
+        synthetic_data = postprocessing.postprocess_for_utility(synthetic_data)
 
     # # Configuration
     # data_config = DataConfig()
@@ -378,7 +379,7 @@ def run_experiment_list(synthetic_data, train_data, test_data, result_path, data
         
 
 
-def run_exp_syn(result_path, real_path, syn_path, real_file, syn_file, data_name, threshold=None):
+def run_exp_syn(result_path, real_path, syn_path, real_file, syn_file, data_name, threshold=None, postprocess=True):
     syn_data = pd.read_csv(os.path.join(syn_path, syn_file))
 
     real_data = pd.read_csv(os.path.join(real_path, real_file)).drop(columns=["sofa", "subject_id"], errors="ignore")
@@ -389,11 +390,12 @@ def run_exp_syn(result_path, real_path, syn_path, real_file, syn_file, data_name
             test_data=test_data,
             result_path=result_path,
             data_name=data_name,
-            threshold=threshold
+            threshold=threshold,
+            postprocess=postprocess
     )
         
 
-def run_exp_syn_folds(result_path, real_fold_path, syn_fold_path, real_pattern, syn_pattern, data_name, thresholds=[0.5, 0.5, 0.5, 0.5, 0.5]):
+def run_exp_syn_folds(result_path, real_fold_path, syn_fold_path, real_pattern, syn_pattern, data_name, thresholds=[0.5, 0.5, 0.5, 0.5, 0.5], postprocess=True):
     sorted_files = sorted(glob.glob( os.path.join(syn_fold_path, syn_pattern)))
     for syn_file in sorted_files:
         fold_idx = int(re.search(r"fold_(\d+)", syn_file).group(1))
@@ -413,7 +415,8 @@ def run_exp_syn_folds(result_path, real_fold_path, syn_fold_path, real_pattern, 
                 result_path=result_path,
                 data_name=data_name,
                 threshold=thresholds[fold_idx-1],
-                fold_num=fold_idx
+                fold_num=fold_idx,
+                postprocess=postprocess
         )
         print(f"Finished {syn_data}")
 
