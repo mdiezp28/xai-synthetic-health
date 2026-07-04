@@ -940,24 +940,26 @@ class DPCGANSynthesizer(BaseSynthesizer):
                             real_cat, fake_cat, self._device, self.pac)
 
                         # ── SHAP update (every focus_update_interval epochs) ───
-                        if i > 0 and i % self.focus_update_interval == 0 and id_ == 0 and n == 0:
-                            importances_dict = self._discriminator.calc_shap_importance(
-                                real_cat, fake_cat, self._transformer
-                            )
-                            tp, fn, tn, fp = importances_dict["tp"], importances_dict["fn"], importances_dict["tn"], importances_dict["fp"]
-                            tn_expanded = importances_dict["tn_expanded"]
-                            column_names = [
-                                info.column_name
-                                for info in self._transformer._column_transform_info_list
-                            ]
-                            self._log_shap(writer, tp, fn, tn, fp, column_names, epoch=i)
-
-                            # ── Update generator focus signal from TN SHAP ────
-                            if tn is not None and self.focus_k_features > 0:
-                                self._update_focus_signal(tn_expanded)
-                                # Log focus signal to TensorBoard
-                                if self._focus_col_signal is not None:
-                                    writer.add_scalar("focus/norm", float(self._focus_signal.norm()), i)
+                        if self.focus_k_features > 0:
+                            if i > 0 and i % self.focus_update_interval == 0 and id_ == 0 and n == 0:
+                                importances_dict = self._discriminator.calc_shap_importance(
+                                    real_cat, fake_cat, self._transformer
+                                )
+                                tp, fn, tn, fp = importances_dict["tp"], importances_dict["fn"], importances_dict["tn"], importances_dict["fp"]
+                                tn_expanded = importances_dict["tn_expanded"]
+                                column_names = [
+                                    info.column_name
+                                    for info in self._transformer._column_transform_info_list
+                                ]
+                                if i % 50 == 0:
+                                    self._log_shap(writer, tp, fn, tn, fp, column_names, epoch=i)
+    
+                                # ── Update generator focus signal from TN SHAP ────
+                                if tn is not None:
+                                    self._update_focus_signal(tn_expanded)
+                                    # Log focus signal to TensorBoard
+                                    if self._focus_col_signal is not None:
+                                        writer.add_scalar("focus/norm", float(self._focus_signal.norm()), i)
 
                         optimizerD.zero_grad()
                         # https://machinelearningmastery.com/how-to-implement-wasserstein-loss-for-generative-adversarial-networks/

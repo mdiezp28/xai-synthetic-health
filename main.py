@@ -7,8 +7,8 @@ from sklearn.model_selection import StratifiedGroupKFold
 from syn_data_evaluation.data import postprocessing
 from syn_data_evaluation.evaluation.fidelity_evaluator import run_simple_evaluation
 from syn_data_evaluation.experiments.run_fidelity import get_submetadata
-from syn_data_evaluation.experiments.run_utility import ExperimentRunner, run_exp_syn_folds as run_experiment_list, sample_dp_cgans
-from tests.run_dp_cgans import DPCGANConfig, run_dp_cgans
+from syn_data_evaluation.experiments.run_utility import ExperimentRunner, run_exp_syn_folds as run_experiment_list, run_exp_syn as run_final_experiment_list
+from tests.run_dp_cgans import DPCGANConfig, run_dp_cgans, sample_dp_cgans, generate_balanced_samples
 
 
 def make_group_stratified_train_test(df, label_col, group_col, test_size=0.25, random_state=42):
@@ -84,13 +84,23 @@ def generate_positive_samples(syn_path, syn_pattern, generators_path):
             continue
 
         print(f"  Model found    : {model_path}")
-
-        output_stem = os.path.join(
+        if fold_num == "X":
+            output_stem = os.path.join(
             syn_path,
-            f"{data_name}_pos_fold_{fold_num}_{date_str}",
+            f"{data_name}_pos",
         )
+        else:
+            output_stem = os.path.join(
+                syn_path,
+                f"{data_name}_pos_fold_{fold_num}_{date_str}",
+            )
+            output_file = os.path.join(
+                syn_path,
+                f"{data_name}_balance_fold_{fold_num}_{date_str}",
+            )
         # generate positive samples using the model and save
         sample_dp_cgans(model_path, nb_rows=syn_data_len, output_file=output_stem, current_time=None, conditions={"in_hospital_death": 1})
+        # generate_balanced_samples(model_path, nb_rows=syn_data_len, output_file=output_file, condition_col="in_hospital_death", postprocess=False)
 
 def extract_date_from_filename(filename: str) -> str | None:
     """
@@ -113,7 +123,7 @@ def find_model_for_date(date_str: str, generators_path: str) -> str | None:
     model_path = os.path.join(generators_path, f"{date_str}_dpcgans_icu_dka.pkl")
     return model_path if os.path.exists(model_path) else None
 
-def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital_death", group_col="subject_id", save_folds=True, config=None, exp_name="baseline", generated_model_path="output/generators", syn_path="output/synthetic_data", evaluation_path="output/evaluation", skip_fold=[]):
+def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital_death", group_col="subject_id", save_folds=True, config=None, exp_name="baseline", generated_model_path="output/generators", syn_path="output/synthetic_data", evaluation_path="output/evaluation", skip_fold=[], run_final=False):
     if real_data is not None:
         # 1) Train/Test 75/25, stratified + grouped
         train_data, test_data = make_group_stratified_train_test(
@@ -170,36 +180,37 @@ def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital
     test_data = test_data.drop(columns=["subject_id", "sofa"], errors="ignore")
     # Create synthetic data using DP-CGANS
     metadata = get_submetadata("./notebooks/icu_dka_metadata.json", train_data.columns)
-    for file in train_files:
-        fold_number = re.search(r"train_fold_(\d+)\.csv", file).group(1)
-        if int(fold_number) in skip_fold:
-            print(f"Fold {fold_number} skipped.")
-            continue
-        tabular_data = pd.read_csv(file).drop(columns=["subject_id", "sofa"])
-        validation = pd.read_csv(os.path.join(folds_dir, f"val_fold_{fold_number}.csv")).drop(columns=["subject_id", "sofa"])
-        print(f"----- Training fold {fold_number} with {len(tabular_data)} rows. -----")
-        model_name, syn_data =run_dp_cgans(tabular_data, f"{syn_path}/syn_data_fold_{fold_number}.csv", generated_model_path, config, save_output=True)
-        # Evaluate Fidelity
-        print(f"Evaluating fidelity for fold {fold_number}... - Model: {model_name}")
-        syn_data_fi = postprocessing.postprocess_for_fidelity(syn_data)
-        run_simple_evaluation(
-            tabular_data, syn_data_fi, metadata,
-            experiment_name=f"{exp_name}_fold_{fold_number}",
-            results_csv=os.path.join(evaluation_path, 'fidelity_results.csv')
-        )
-        # Evaluate Utility - for now, run only experiment 1
-        syn_data_util = postprocessing.postprocess_for_utility(syn_data)
-        ExperimentRunner().run_experiment(
-            train_data=syn_data_util, 
-            test_data=validation,
-            out_dir=f"{evaluation_path}/{exp_name}/fold_{fold_number}",
-            exp_name=exp_name,
-        )
+    if not run_final:
+        for file in train_files:
+            fold_number = re.search(r"train_fold_(\d+)\.csv", file).group(1)
+            if int(fold_number) in skip_fold:
+                print(f"Fold {fold_number} skipped.")
+                continue
+            tabular_data = pd.read_csv(file).drop(columns=["subject_id", "sofa"])
+            validation = pd.read_csv(os.path.join(folds_dir, f"val_fold_{fold_number}.csv")).drop(columns=["subject_id", "sofa"])
+            print(f"----- Training fold {fold_number} with {len(tabular_data)} rows. -----")
+            model_name, syn_data =run_dp_cgans(tabular_data, f"{syn_path}/{exp_name}_syn_data_fold_{fold_number}", generated_model_path, config, save_output=True)
+            # Evaluate Fidelity
+            print(f"Evaluating fidelity for fold {fold_number}... - Model: {model_name}")
+            syn_data_fi = postprocessing.postprocess_for_fidelity(syn_data)
+            run_simple_evaluation(
+                tabular_data, syn_data_fi, metadata,
+                experiment_name=f"{exp_name}_fold_{fold_number}",
+                results_csv=os.path.join(evaluation_path, 'fidelity_results.csv')
+            )
+            # Evaluate Utility - for now, run only experiment 1
+            syn_data_util = postprocessing.postprocess_for_utility(syn_data)
+            ExperimentRunner().run_experiment(
+                train_data=syn_data_util, 
+                test_data=validation,
+                out_dir=f"{evaluation_path}/{exp_name}/fold_{fold_number}",
+                exp_name=f"{exp_name}_fold_{fold_number}",
+            )
 
     # Repeat for the final model training on the entire training set and evaluation on the test set.
-    if False:
+    if run_final:
         print(f"----- Run final model with {len(train_data)} rows. -----")
-        model_name, syn_data =run_dp_cgans(train_data, f"{syn_path}/syn_data.csv", generated_model_path, config, save_output=True)
+        model_name, syn_data =run_dp_cgans(train_data, f"{syn_path}/{exp_name}_syn_data", generated_model_path, config, save_output=True)
         # Evaluate Fidelity
         print(f"Evaluating fidelity - Model: {model_name}")
         syn_data_fi = postprocessing.postprocess_for_fidelity(syn_data)
@@ -214,13 +225,13 @@ def main(real_data=None, train_data=None, test_data=None, label_col="in_hospital
             train_data=syn_data_util, 
             test_data=test_data,
             out_dir=f"{evaluation_path}/{exp_name}/final",
-            exp_name=exp_name,
+            exp_name=f"{exp_name}_final",
         )
 
 
 RESOURCE_FOLDER = "./dp_cgans/resources/"
 GENERATE_SYNTHETIC_DATA = True
-RUN_UTILITY_EXPERIMENTS = True
+RUN_UTILITY_EXPERIMENTS = False
 
 if __name__ == "__main__":
     # real_data = pd.read_csv(os.path.join(RESOURCE_FOLDER, "icu_dka_dataset_20260415.csv"))
@@ -236,8 +247,9 @@ if __name__ == "__main__":
     os.makedirs(evaluation_path, exist_ok=True)
     syn_path = f'{output_dir}/synthetic_data'
     os.makedirs(syn_path, exist_ok=True)
-    utility_path = f'{output_dir}/utility'
+    utility_path = f'{output_dir}/utility/'
     os.makedirs(utility_path, exist_ok=True)
+
 
     if GENERATE_SYNTHETIC_DATA:
         config = DPCGANConfig(
@@ -249,43 +261,136 @@ if __name__ == "__main__":
             discriminator_lr=2e-5,
             discriminator_steps=5,
             private=False,
-            focus_update_interval=5,
-            xai_weight=1, 
-            focus_k_features=15,# if 0 DISABLES focus vector
+            focus_update_interval=25,
+            focus_k_features=0,
+            xai_weight=0,
             saved_transformer=transformers_path+'/fitted_transformer.pkl'
         )    
-        main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name="config", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[])
+        # main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name=f"dp_baseline", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[])
+        # config.xai_weight = 1
+        # config.focus_k_features = 10
+        # main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name=f"dp_shap_focus", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=[])
+        # main(real_data=real_data, save_folds=True)
+        # features = [20, 10]
+        # weight = [1, 2]
+        exp_config =[ # (w,k)
+            # (2.5, 15),
+            # (10, 10),
+            # (1, 5),
+            # (2, 10),
+            # (1, 10),
+            # (2,20),
+            # (1, 15),
+            # (2, 15),
+            # (1.5, 10),
+            # (0, 10),
+            # (1,10),
+            # (1,5),
+            (1,20)
+        ]
+        skip_folds = []
+        main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name=f"cgans", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=skip_folds)
+        for w, k in exp_config:
+            print(f"Start experiment: weight ={w} num features={k}")
+            config.xai_weight = w
+            config.focus_k_features = k            
+            main(real_data=None, train_data=train_data, test_data=test_data, save_folds=False, config=config, exp_name=f"shap_focus_{k}f", generated_model_path=generated_model_path, syn_path=syn_path, evaluation_path=evaluation_path, skip_fold=skip_folds)
+            
 
     if RUN_UTILITY_EXPERIMENTS:
         # Run utility experiments list
         experiment_list = [
-            ("baseline", 'config_3_syn_data_fold_*.csv'),
-            ("test", 'syn_data_fold_*.csv'),
-            # ("focus_0.1", 'conf_0.1_syn_data_fold_*.csv'),
+            # ("dp_cgans", 'dp_cgans_syn_data_fold_*.csv'),
+            # ("dp_shap_focus", 'dp_shap_focus_10f_weight_1_syn_data_fold_*.csv'),
+            # ("cgans_val", 'cgans_syn_data_fold_*.csv', False),
+            # ("cgans_test", 'cgans_syn_data_fold_*.csv', True),
+            ("shap_val", 'shap_focus_10f_syn_data_fold_5_*.csv', False),
+            # ("shap_test", 'shap_focus_10f_syn_data_fold_*.csv', True),
+            # ("shap_focus_val", 'shap_focus_10f_syn_data_fold_*.csv'),
+            # ("baseline_testset", 'baseline_syn_data_fold_*.csv'),
+            # ("shap_focus_testset", 'shap_focus_10f_weight_1_int25_syn_data_fold_*.csv'),
+            # ("shap_focus_0.5_testset", 'shap_focus_10f_weight_0.5_int25_syn_data_fold_*.csv'),
+            # ("baseline_balance", 'baseline__balance_fold_*.csv'),
+            # ("shap_focus_pos", 'shap_focus_pos_fold_*'),
+            # ("final_shap_focus", 'final_shap_focus_syn_data_2026_05_13_14_47_37.csv'),
+            # ("shap_focus_balance", 'shap_focus_balance_fold_*'),
+            # ("shap_focus_10", 'shap_focus10f_weight_10_int25_*'),
+            # ("shap_focus_2", 'shap_focus10f_weight_2_int25_*'),
         ]
         
+        final = False
+        postprocess = True
         utility_start = time.perf_counter()
-        for data_name, syn_pattern in experiment_list:
-            print(f"Running utility experiments for {data_name} with pattern {syn_pattern}...")
-            experiment_start = time.perf_counter()
+        thresholds=[0.0571, 0.1874, 0.0474, 0.0886, 0.5213]
 
+        for data_name, syn_pattern, use_test_set in experiment_list:
+            print(f"Running utility experiments for {data_name} with pattern {syn_pattern}... - Test set: {use_test_set}")
+            if use_test_set:
+                test_file = test_data
+            else:
+                test_file = None
+            experiment_start = time.perf_counter()
+            if final:
+                real_file = f"icu_dka_train_data.csv"
+                run_final_experiment_list(
+                    result_path=utility_path,
+                    real_path=RESOURCE_FOLDER,
+                    syn_path=syn_path, 
+                    real_file="icu_dka_train_data.csv", 
+                    syn_file=syn_pattern, 
+                    data_name=data_name,
+                    threshold = 0.1526,
+                    postprocess=postprocess
+                )
+            else: 
+                run_experiment_list(
+                    result_path=utility_path,
+                    real_fold_path=os.path.join(RESOURCE_FOLDER, "folds"),
+                    syn_fold_path=syn_path,
+                    real_pattern="train_fold_*.csv",
+                    syn_pattern=syn_pattern,
+                    data_name=data_name,
+                    thresholds=thresholds,
+                    postprocess=postprocess,
+                    test_file=test_file
+                )
             # check if positive samples exist
-            pos_pattern = syn_pattern.replace("*.csv", "pos_*.csv")
-            syn_files = glob.glob(os.path.join(syn_path, pos_pattern))
-            if not syn_files:
+            pos_pattern = f"{data_name}_pos*.csv"
+            pos_files = glob.glob(os.path.join(syn_path, pos_pattern))
+            if not pos_files:
                 # If no pos_*.csv files, generate them by filtering the original syn_data_fold_*.csv files
                 print(f"No files matching {pos_pattern} found. Generating positive samples...")
                 generate_positive_samples(syn_path, syn_pattern, generated_model_path)
+            else:
+                print(f"found: {pos_files}")
+                continue
 
-            run_experiment_list(
-                result_path=utility_path,
-                real_fold_path=os.path.join(RESOURCE_FOLDER, "folds"),
-                syn_fold_path=syn_path,
-                real_pattern="train_fold_*.csv",
-                syn_pattern=syn_pattern,
-                data_name=data_name,
-                thresholds=[0.0689, 0.1243, 0.0865, 0.1692, 0.3140]
-            )
+            # Run positive experiments
+            if final:
+                real_file = f"icu_dka_train_data.csv"
+                run_final_experiment_list(
+                    result_path=utility_path,
+                    real_path=RESOURCE_FOLDER,
+                    syn_path=syn_path, 
+                    real_file="icu_dka_train_data.csv", 
+                    syn_file=f"{data_name}_pos.csv", 
+                    data_name=f"{data_name}_pos",
+                    threshold = 0.1526,
+                    postprocess=postprocess
+                )
+            else: 
+                run_experiment_list(
+                    result_path=utility_path,
+                    real_fold_path=os.path.join(RESOURCE_FOLDER, "folds"),
+                    syn_fold_path=syn_path,
+                    real_pattern="train_fold_*.csv",
+                    syn_pattern=pos_pattern,
+                    data_name=data_name+"_pos",
+                    thresholds=thresholds,
+                    postprocess=postprocess,
+                    test_file=test_file
+                )
+                
             experiment_elapsed = time.perf_counter() - experiment_start
             print(f"Utility experiments for {data_name} finished in {experiment_elapsed / 60:.2f} minutes ({experiment_elapsed:.2f} seconds).")
 

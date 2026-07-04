@@ -66,7 +66,7 @@ def run_dp_cgans(tabular_data, output_file, generated_model_path, config= None, 
         generator_lr=config.generator_lr,
         discriminator_lr=config.discriminator_lr,
         discriminator_steps=config.discriminator_steps,
-        private=False,
+        private=config.private,
         focus_k_features=config.focus_k_features,
         focus_update_interval=config.focus_update_interval,
         xai_weight=config.xai_weight,
@@ -138,7 +138,7 @@ def generate_balanced_samples(model_path, nb_rows, output_file, condition_col, p
         .reset_index(drop=True)
     )
     
-    output_path = f'output/{output_file}_balanced.csv'
+    output_path = f'{output_file}.csv'
     combined.to_csv(output_path, index=False)
     print(f'Balanced synthetic data saved to {output_path}')
     return combined

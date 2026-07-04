@@ -395,7 +395,7 @@ def run_exp_syn(result_path, real_path, syn_path, real_file, syn_file, data_name
     )
         
 
-def run_exp_syn_folds(result_path, real_fold_path, syn_fold_path, real_pattern, syn_pattern, data_name, thresholds=[0.5, 0.5, 0.5, 0.5, 0.5], postprocess=True):
+def run_exp_syn_folds(result_path, real_fold_path, syn_fold_path, real_pattern, syn_pattern, data_name, thresholds=[0.5, 0.5, 0.5, 0.5, 0.5], postprocess=True, test_file=None):
     sorted_files = sorted(glob.glob( os.path.join(syn_fold_path, syn_pattern)))
     for syn_file in sorted_files:
         fold_idx = int(re.search(r"fold_(\d+)", syn_file).group(1))
@@ -406,7 +406,10 @@ def run_exp_syn_folds(result_path, real_fold_path, syn_fold_path, real_pattern, 
         print("="*80 + "\n")
         syn_data = pd.read_csv(syn_file)
         real_data = pd.read_csv(real_file).drop(columns=["sofa", "subject_id"], errors="ignore")
-        test_data = pd.read_csv(os.path.join(real_fold_path, f"val_fold_{fold_idx}.csv")).drop(columns=["sofa", "subject_id"], errors="ignore")
+        if test_file is None:
+            test_data = pd.read_csv(os.path.join(real_fold_path, f"val_fold_{fold_idx}.csv")).drop(columns=["sofa", "subject_id"], errors="ignore")
+        else: 
+            test_data = test_file
 
         run_experiment_list(
                 synthetic_data=syn_data,
